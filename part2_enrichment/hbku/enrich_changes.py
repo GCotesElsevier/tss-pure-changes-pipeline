@@ -92,16 +92,29 @@
 # COMMAND ----------
 
 import logging
+import sys
 
 import pandas as pd
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("enrich_changes")
 
 # Same Arrow bug Part 1 hit (see part1_changes/hbku/fetch_changes.py): a
 # pandas -> Spark conversion can silently corrupt small/oddly-typed batches
 # unless this is disabled first.
 spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "false")
+
+# logging.basicConfig() is a no-op here: Databricks pre-configures the root
+# logger's handlers before this cell runs, so basicConfig's "only attach a
+# handler if the root has none yet" check silently skips it. Configuring our
+# own named logger directly (same pattern as fetch_changes.py) avoids that,
+# and explicitly targets stdout since the default StreamHandler's stderr
+# output doesn't reliably show in the notebook cell's output area.
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+for handler in logger.handlers[:]:
+    logger.removeHandler(handler)
+handler = logging.StreamHandler(sys.stdout)
+handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+logger.addHandler(handler)
+logger.propagate = False
 
 # COMMAND ----------
 
