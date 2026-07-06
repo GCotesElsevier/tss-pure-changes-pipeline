@@ -85,5 +85,9 @@ def count_recent_records(base_url: str, api_key: str, end_point: str, query_fiel
 dbutils.widgets.text("SINCE_DATE", "2026-06-07", "Since date (YYYY-MM-DD, up to ~30 days back)")
 since_date = dbutils.widgets.get("SINCE_DATE")
 
-award_count = count_recent_records(LEGACY_URL, LEGACY_API_KEY, "awards", "awardsQuery", since_date)
-logger.info("Awards modified since %s: %d", since_date, award_count)
+# createdAfter is an XML Schema `dateTime`, not a plain date — a bare
+# "YYYY-MM-DD" is rejected with cvc-datatype-valid.1.2.1.
+since_datetime = f"{since_date}T00:00:00.000Z"
+
+award_count = count_recent_records(LEGACY_URL, LEGACY_API_KEY, "awards", "awardsQuery", since_datetime)
+logger.info("Awards created since %s: %d", since_datetime, award_count)
