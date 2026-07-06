@@ -29,6 +29,13 @@
 import logging
 import sys
 
+# Preemptive: Arrow-optimized createDataFrame silently corrupted a row
+# during a similar pandas -> Spark write in part1_changes/hbku/fetch_changes.py
+# ("Cannot grow BufferHolder by size -32"). No failure seen here yet, but
+# entity_sync.py's _upsert does the same kind of conversion, so disabling
+# Arrow here too rather than waiting to hit the same bug.
+spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "false")
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 for handler in logger.handlers[:]:
