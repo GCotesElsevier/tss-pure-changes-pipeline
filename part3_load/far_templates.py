@@ -748,6 +748,12 @@ class PureCustomBaseTransformer(PureBaseTransformer):
                 for y, m, d in zip(self._col(df, "end_date_year"), self._col(df, "end_date_month"), self._col(df, "end_date_day"))
             ],
             "Status": self._get_col(df, "status"),
+            # Not a real FAR field -- carried through so postprocess_changes.py
+            # can attach changeType (new/updates SFTP split) by uuid, same as
+            # Scholarly Activities/Grants' "uuid_output" (which "Record ID"
+            # already IS for Custom Sections, but kept under this name too
+            # for a uniform merge key across all scopes).
+            "uuid_output": self._get_col(df, "uuid"),
         }
 
 
@@ -772,7 +778,7 @@ class Pure_Custom_SP_Transformer(PureCustomBaseTransformer):
             "Record ID", "Faculty ID", "Subtype", "Work Title",
             "Description", "Start Date", "End Date",
             "Organization", "Num Participants", "Benefits to University",
-            "Status",
+            "Status", "uuid_output",
         ]
         return pd.DataFrame(cols)[col_order]
 
@@ -798,7 +804,7 @@ class Pure_Custom_SU_Transformer(PureCustomBaseTransformer):
             "Record ID", "Faculty ID", "Subtype", "Work Title",
             "Description", "Start Date", "End Date",
             "Organization", "Num Participants", "Benefits to University",
-            "Status",
+            "Status", "uuid_output",
         ]
         return pd.DataFrame(cols)[col_order]
 
@@ -824,7 +830,7 @@ class Pure_Custom_OPM_Transformer(PureCustomBaseTransformer):
             "Record ID", "Faculty ID", "Subtype", "Work Title",
             "Description", "Start Date", "End Date",
             "Organization", "Num Participants", "Benefits to University",
-            "Status",
+            "Status", "uuid_output",
         ]
         return pd.DataFrame(cols)[col_order]
 
@@ -865,6 +871,6 @@ class Pure_Custom_Consulting_Transformer(PureCustomBaseTransformer):
             "Record ID", "Faculty ID", "Subtype", "Work Title",
             "Description of Engagement", "Start Date", "End Date",
             "Client Name", "Estimated Hours",
-            "Status",
+            "Status", "uuid_output",
         ]
         return pd.DataFrame(cols)[col_order]

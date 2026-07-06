@@ -280,15 +280,20 @@ def fetch_journal_impact_factor(pure_api, journal_id, year):
     return None
 
 
-def process_research_output(uuids: list):
-    if not uuids:
+def process_research_output(changes_rows: pd.DataFrame):
+    if changes_rows.empty:
         return pd.DataFrame(), pd.DataFrame()
 
+    uuids = changes_rows["uuid"].tolist()
     raw_records = fetch_records_parallel(
         lambda uuid: pure_api.read_record("research-outputs", uuid), uuids, label="research-outputs"
     )
     flat = flatten_dataframe(raw_records)
     result = apply_transforms(flat, RESEARCH_OUTPUT_TRANSFORM_CONFIG)
+
+    # Carried through to Part 3, which needs it to split the FAR CSV
+    # exports into new/ vs updates/ SFTP subfolders.
+    result = result.merge(changes_rows[["uuid", "changeType"]], how="left", on="uuid")
 
     result = result.merge(publisher_lookup, how="left", on="publisher_uuid")
     result = result.merge(event_lookup, how="left", on="event_uuid")
@@ -313,10 +318,11 @@ def process_research_output(uuids: list):
 
 # COMMAND ----------
 
-def process_custom_sections(uuids: list) -> pd.DataFrame:
-    if not uuids:
+def process_custom_sections(changes_rows: pd.DataFrame) -> pd.DataFrame:
+    if changes_rows.empty:
         return pd.DataFrame()
 
+    uuids = changes_rows["uuid"].tolist()
     raw_records = fetch_records_parallel(
         lambda uuid: pure_api.read_record("activities", uuid), uuids, label="activities"
     )
@@ -330,6 +336,10 @@ def process_custom_sections(uuids: list) -> pd.DataFrame:
     # expects a "subtype" column, same as Research Output/Grants.
     result = result.rename(columns={"type": "subtype"})
     result["type"] = "Custom Sections"
+
+    # Carried through to Part 3, which needs it to split the FAR CSV
+    # exports into new/ vs updates/ SFTP subfolders.
+    result = result.merge(changes_rows[["uuid", "changeType"]], how="left", on="uuid")
 
     result["managing_organization"] = build_org_name_map(result["managing_organization_uuid"])
     result["member_of_name"] = build_org_name_map(result["member_of_uuid"])
@@ -357,6 +367,12 @@ def process_grants(changes_rows: pd.DataFrame):
     flat = flatten_dataframe(merged_records)
     result = apply_transforms(flat, GRANTS_TRANSFORM_CONFIG, context={"external_organizations": external_orgs_df})
 
+    # Carried through to Part 3, which needs it to split the FAR CSV
+    # exports into new/ vs updates/ SFTP subfolders. changes_rows is keyed
+    # by the ORIGINAL Project/Award uuid, which is what "uuid" resolves to
+    # after GRANTS_TRANSFORM_CONFIG's uuid fill_from (Project priority).
+    result = result.merge(changes_rows[["uuid", "changeType"]], how="left", on="uuid")
+
     authors = explode_participants(result, id_column="uuid", list_column="participants", language=LANGUAGE)
     authors = attach_faculty_id(authors, persons_df, email_to_faculty_id)
 
@@ -371,7 +387,7 @@ logger.info(
     "[scholarly_activities] %d to enrich, %d deletes", len(scholarly_non_deletes), len(scholarly_deletes)
 )
 
-research_output_df, research_output_authors_df = process_research_output(scholarly_non_deletes["uuid"].tolist())
+research_output_df, research_output_authors_df = process_research_output(scholarly_non_deletes)
 research_output_deletes_df = build_deletes_table(scholarly_deletes, "scholarly_activities")
 
 save_table(research_output_df, f"enriched_research_output_{CURRENT_DAY}")
@@ -386,7 +402,7 @@ logger.info(
     "[custom_sections] %d to enrich, %d deletes", len(custom_sections_non_deletes), len(custom_sections_deletes)
 )
 
-custom_sections_df = process_custom_sections(custom_sections_non_deletes["uuid"].tolist())
+custom_sections_df = process_custom_sections(custom_sections_non_deletes)
 custom_sections_deletes_df = build_deletes_table(custom_sections_deletes, "custom_sections")
 
 save_table(custom_sections_df, f"enriched_custom_sections_{CURRENT_DAY}")

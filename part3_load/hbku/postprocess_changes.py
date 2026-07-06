@@ -24,15 +24,23 @@
 # MAGIC `enrich_changes.py`), so the internal-row filter is applied directly
 # MAGIC to the main table here instead of to a joined authors table.
 # MAGIC
-# MAGIC **DELETE records are not handled here** — Part 2 only passes through
-# MAGIC minimal `uuid`/`scope`/`changeType` for deletes, for audit purposes;
-# MAGIC there is no enriched record to build a FAR template from.
+# MAGIC **DELETE records get a minimal CSV, not a FAR template** — Part 2
+# MAGIC only passes through `uuid`/`scope`/`changeType` for deletes (the Pure
+# MAGIC record is already gone, nothing to enrich), so their SFTP export is
+# MAGIC just those bare uuids, one file per scope (not per type — a deleted
+# MAGIC record's subtype was never fetched).
 # MAGIC
-# MAGIC **Not done yet, on purpose:** no SFTP upload. The folder structure
-# MAGIC (`new` / `updates` / `deletes` subfolders per scope, replacing
-# MAGIC `tss-dedup`'s single-folder + `old_files` archive) is still to be
-# MAGIC designed together — this notebook only builds and saves the
-# MAGIC `far_results_*` / `far_collaborators_*` tables for now.
+# MAGIC **SFTP layout** (`{SFTP_BASE}/{sftp_folder}/{new,updates,deletes}/`,
+# MAGIC designed together with the user): each scope's SFTP folder now has 3
+# MAGIC subfolders instead of tss-dedup's single folder + `old_files` archive.
+# MAGIC Every exported type's results/collaborator files are split by
+# MAGIC `changeType` (CREATE -> `new/`, UPDATE -> `updates/`) and uploaded to
+# MAGIC the matching subfolder; deletes always go to `deletes/`. The
+# MAGIC `old_files` archiving behavior is unchanged from the original, just
+# MAGIC scoped to each subfolder individually instead of the whole scope
+# MAGIC folder. See `sftp_utils.py` and `hbku/migrate_sftp_layout.py` (one-time
+# MAGIC migration of whatever already sits directly in each scope folder into
+# MAGIC its `new/` subfolder, per the user's request) for more.
 
 # COMMAND ----------
 
@@ -45,6 +53,10 @@
 # COMMAND ----------
 
 # MAGIC %run ../far_templates
+
+# COMMAND ----------
+
+# MAGIC %run ../sftp_utils
 
 # COMMAND ----------
 
@@ -158,7 +170,19 @@ def build_far_template(primary_df, type_name, transformer_cls, authors_df=None, 
     if df_all_data.empty:
         return pd.DataFrame()
 
-    return transformer_cls().build(df_all_data)
+    df_template = transformer_cls().build(df_all_data)
+
+    # changeType isn't a real FAR field -- attached here (by uuid, not by
+    # position: .build() re-filters to internal rows internally too, so row
+    # order/count isn't guaranteed to match df_all_data 1:1) so the SFTP
+    # upload step can split each type's export into new/ vs updates/.
+    if not df_template.empty and "changeType" in df_all_data.columns:
+        change_type_by_uuid = df_all_data[["uuid", "changeType"]].drop_duplicates(subset="uuid")
+        df_template = df_template.merge(
+            change_type_by_uuid, left_on="uuid_output", right_on="uuid", how="left"
+        ).drop(columns=["uuid"])
+
+    return df_template
 
 
 def build_collaborators(authors_df: pd.DataFrame, results_df: pd.DataFrame) -> pd.DataFrame:
@@ -172,11 +196,14 @@ def build_collaborators(authors_df: pd.DataFrame, results_df: pd.DataFrame) -> p
     if authors_df.empty or results_df.empty:
         return pd.DataFrame()
 
-    uuid_to_record = (
-        results_df[["uuid_output", "record_id"]]
-        .drop_duplicates()
-        .rename(columns={"uuid_output": "uuid"})
-    )
+    # "changetype" (results_df is already normalize_columns'd by this point,
+    # so "changeType" -> "changetype") rides along so each collaborator row
+    # can be routed to the same new/ vs updates/ SFTP subfolder as its
+    # parent record.
+    link_cols = ["uuid_output", "record_id"]
+    if "changetype" in results_df.columns:
+        link_cols.append("changetype")
+    uuid_to_record = results_df[link_cols].drop_duplicates().rename(columns={"uuid_output": "uuid"})
 
     out_df = authors_df.merge(uuid_to_record, on="uuid", how="inner")
     # Unlike the original (which re-derived pure_id from record_id via a
@@ -194,6 +221,8 @@ def build_collaborators(authors_df: pd.DataFrame, results_df: pd.DataFrame) -> p
         "role", "percent_effort", "sort_order", "custom_coauthor_classifications",
         "pure_id", "uuid",
     ]
+    if "changetype" in out_df.columns:
+        cols.append("changetype")
     return out_df[cols].drop_duplicates()
 
 
@@ -214,6 +243,40 @@ def save_table(df: pd.DataFrame, table_name: str) -> None:
         logger.info("Nothing to save for %s — skipping (no dated table created for today).", full_table_name)
         return
     safe_save_table(spark, logger, df, full_table_name)
+
+
+CHANGE_TYPE_TO_STATUS_FOLDER = {"CREATE": "new", "UPDATE": "updates"}
+
+
+def upload_split_by_changetype(df: pd.DataFrame, scope_folder: str, filename_builder) -> None:
+    """
+    Splits `df` by its "changetype" column (CREATE -> new/, UPDATE ->
+    updates/) and uploads each non-empty half to SFTP. `filename_builder`
+    is a callable `(status_folder) -> filename`, since the collaborator
+    files use a different name pattern than the main results.
+    """
+    if df.empty or "changetype" not in df.columns:
+        return
+    for change_type, status_folder in CHANGE_TYPE_TO_STATUS_FOLDER.items():
+        subset = df[df["changetype"] == change_type].drop(columns=["changetype"])
+        if subset.empty:
+            continue
+        filename = filename_builder(status_folder)
+        remote_path = upload_df_to_sftp(
+            csv_ready(subset), SFTP_BASE, scope_folder, status_folder, filename, logger,
+            secret_scope=SFTP_SECRET_SCOPE,
+        )
+        logger.info("Uploaded %d rows to %s", len(subset), remote_path)
+
+
+def build_deletes_export(deletes_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Deletes are never enriched (see module docstring) -- just the bare
+    identifying columns Part 2 already produced, ready for CSV upload.
+    """
+    if deletes_df.empty:
+        return deletes_df
+    return deletes_df.drop(columns=["scope"], errors="ignore")
 
 
 def log_unmapped_subtypes(df: pd.DataFrame, subtype_column: str, known_types, scope_label: str) -> None:
@@ -274,10 +337,31 @@ for type_name in scholarly_cfg["types"]:
     collaborators_df = build_collaborators(research_output_authors_df, df_template)
     save_table(collaborators_df, f"far_collaborators_{suffix}_{CURRENT_DAY}")
 
+    upload_split_by_changetype(
+        df_template, scholarly_cfg["sftp_folder"],
+        lambda status_folder: f"Faculty180_{suffix}_{YEAR}-{MONTH}-{DAY}_01.csv",
+    )
+    upload_split_by_changetype(
+        collaborators_df, scholarly_cfg["sftp_folder"],
+        lambda status_folder: f"Faculty180_{suffix}_collaborator_{YEAR}-{MONTH}-{DAY}_01.csv",
+    )
+
     logger.info(
         "[scholarly_activities] %s: %d rows exported, %d collaborators",
         type_name, len(df_template), len(collaborators_df),
     )
+
+# COMMAND ----------
+
+scholarly_deletes_df = build_deletes_export(read_enriched_table(f"enriched_research_output_deletes_{CURRENT_DAY}"))
+if not scholarly_deletes_df.empty:
+    remote_path = upload_df_to_sftp(
+        csv_ready(scholarly_deletes_df), SFTP_BASE, scholarly_cfg["sftp_folder"], "deletes",
+        f"Faculty180_deletes_{YEAR}-{MONTH}-{DAY}_01.csv", logger, secret_scope=SFTP_SECRET_SCOPE,
+    )
+    logger.info("[scholarly_activities] uploaded %d deletes to %s", len(scholarly_deletes_df), remote_path)
+else:
+    logger.info("[scholarly_activities] no deletes to upload today.")
 
 # COMMAND ----------
 
@@ -312,10 +396,31 @@ for type_name in grants_cfg["types"]:  # just ["Award"] -- Pure's own Project/Aw
     collaborators_df = build_collaborators(grants_authors_df, df_template)
     save_table(collaborators_df, f"far_collaborators_{suffix}_{CURRENT_DAY}")
 
+    upload_split_by_changetype(
+        df_template, grants_cfg["sftp_folder"],
+        lambda status_folder: f"Faculty180_{suffix}_{YEAR}-{MONTH}-{DAY}_01.csv",
+    )
+    upload_split_by_changetype(
+        collaborators_df, grants_cfg["sftp_folder"],
+        lambda status_folder: f"Faculty180_{suffix}_collaborator_{YEAR}-{MONTH}-{DAY}_01.csv",
+    )
+
     logger.info(
         "[grants] %s: %d rows exported, %d collaborators",
         type_name, len(df_template), len(collaborators_df),
     )
+
+# COMMAND ----------
+
+grants_deletes_df = build_deletes_export(read_enriched_table(f"enriched_grants_deletes_{CURRENT_DAY}"))
+if not grants_deletes_df.empty:
+    remote_path = upload_df_to_sftp(
+        csv_ready(grants_deletes_df), SFTP_BASE, grants_cfg["sftp_folder"], "deletes",
+        f"Faculty180_deletes_{YEAR}-{MONTH}-{DAY}_01.csv", logger, secret_scope=SFTP_SECRET_SCOPE,
+    )
+    logger.info("[grants] uploaded %d deletes to %s", len(grants_deletes_df), remote_path)
+else:
+    logger.info("[grants] no deletes to upload today.")
 
 # COMMAND ----------
 
@@ -349,6 +454,23 @@ for type_name in custom_cfg["types"]:
     save_table(df_template, f"far_results_{suffix}_{CURRENT_DAY}")
     save_table(df_template.sample(min(50, len(df_template))), f"far_sample_results_{suffix}_{CURRENT_DAY}")
 
+    upload_split_by_changetype(
+        df_template, custom_cfg["sftp_folder"],
+        lambda status_folder: f"Faculty180_{suffix}_{YEAR}-{MONTH}-{DAY}_01.csv",
+    )
+
     # No collaborator file for Custom Sections -- same as the original
     # (it has no author data at all, internal or external).
     logger.info("[custom_sections] %s: %d rows exported", type_name, len(df_template))
+
+# COMMAND ----------
+
+custom_sections_deletes_df = build_deletes_export(read_enriched_table(f"enriched_custom_sections_deletes_{CURRENT_DAY}"))
+if not custom_sections_deletes_df.empty:
+    remote_path = upload_df_to_sftp(
+        csv_ready(custom_sections_deletes_df), SFTP_BASE, custom_cfg["sftp_folder"], "deletes",
+        f"Faculty180_deletes_{YEAR}-{MONTH}-{DAY}_01.csv", logger, secret_scope=SFTP_SECRET_SCOPE,
+    )
+    logger.info("[custom_sections] uploaded %d deletes to %s", len(custom_sections_deletes_df), remote_path)
+else:
+    logger.info("[custom_sections] no deletes to upload today.")

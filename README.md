@@ -20,10 +20,18 @@ The pipeline has three parts, each a module in this repo:
    data for all 3 scopes.
 3. **`part3_load/`** — Builds Faculty180 (FAR) upload templates from Part
    2's enriched records (`far_templates.py`, ported from `tss-dedup`'s
-   `postprocessing/transformers.py`). Validated locally against synthetic
-   data; not yet run against real Databricks data. SFTP upload (split into
-   `new` / `updates` / `deletes` subfolders, replacing `tss-dedup`'s single
-   folder + `old_files` archive) is still to be designed and built.
+   `postprocessing/transformers.py`) and uploads them to SFTP, split by
+   `changeType` into `new` / `updates` subfolders per scope, plus a
+   `deletes` subfolder for deleted-record CSVs — replacing `tss-dedup`'s
+   single folder + `old_files` archive (the `old_files` archiving itself is
+   unchanged, just scoped per subfolder now). The Delta-table-saving half
+   ran successfully once against real HBKU data (Scholarly Activities +
+   Grants); the SFTP upload half is validated only locally against
+   synthetic data and a mocked upload function — the real SFTP connection
+   has not been exercised yet. A one-time migration notebook
+   (`hbku/migrate_sftp_layout.py`) moves whatever already sits in each
+   scope's SFTP folder into its new `new/` subfolder before the first real
+   upload.
 
 ## Scopes
 
@@ -68,7 +76,8 @@ values for each scope are homologated in
 
 ## Status
 
-Parts 1 and 2 are validated end-to-end against real HBKU data. Part 3 is
-built and validated locally against synthetic data, but not yet run in
-Databricks, and does not upload to SFTP yet. See each part's own README for
-open design points.
+Parts 1 and 2 are validated end-to-end against real HBKU data. Part 3's
+Delta-table-saving half ran successfully once against real data; its SFTP
+upload has only been validated locally (synthetic data + a mocked upload
+function), not against the real server. See each part's own README for open
+design points.
