@@ -29,24 +29,24 @@
 
 ## Open design points
 
-1. **Family names per scope.** Confirmed against a live, unfiltered run of
-   `hbku/discover_families.py` over 2026-07-01 → 2026-07-06:
-   `ResearchOutput` (Scholarly Activities, 5,752 events), `Activity` (Custom
-   Sections, 2 events), and `Project` (Grants, 1 event) all appeared exactly
-   as configured. `Award` (Grants) did **not** appear in this window — with
-   only 1 `Project` event in 5 days, that is plausibly just low volume rather
-   than a wrong family name (it is a real Pure content type, mirrored by the
-   separate `awards` endpoint in `ip-pure2far-integration`), but it remains
-   unconfirmed. Since Pure's `/changes` endpoint has no server-side family
-   filter, re-running `discover_families.py` over a longer window is just as
-   expensive as before rather than cheaper. Use `hbku/check_recent_awards.py`
-   instead — a single, server-side-filtered call to the regular `awards`
-   endpoint — to check whether any award changed recently at all before
-   relying on `Award` in Part 2.
+1. ~~Family names per scope.~~ **Resolved.** Confirmed against a live,
+   unfiltered run of `hbku/discover_families.py` over 2026-07-01 →
+   2026-07-06: `ResearchOutput` (Scholarly Activities, 5,752 events),
+   `Activity` (Custom Sections, 2 events), and `Project` (Grants, 1 event)
+   all appeared exactly as configured. `Award` (Grants) did not appear in
+   that window, but `hbku/check_recent_awards.py` (a direct, server-side
+   `createdAfter`-filtered call to Pure's `awards` endpoint — much cheaper
+   than re-running the unfiltered changes stream, which has no server-side
+   family filter) confirmed **0 awards were created in the last ~30 days**,
+   which fully explains the absence: low volume, not a wrong family name.
+   Caveat: this only checked creations, not updates to existing awards (same
+   limitation as `ip-pure2far-integration`'s own grants sync, which also
+   hardcodes `createdAfter`) — acceptable for now, revisit if `Award`
+   updates turn out to matter in Part 2.
    Also observed: `InternalOrganization`/`Organisation` never appeared in
-   this window either (only `ExternalOrganisation` did) — irrelevant to
-   Part 1's 3 scopes, but worth remembering for Part 2, since internal org
-   changes may not surface reliably through this stream.
+   the `discover_families.py` window either (only `ExternalOrganisation`
+   did) — irrelevant to Part 1's 3 scopes, but worth remembering for Part 2,
+   since internal org changes may not surface reliably through this stream.
 2. ~~Resumption token persistence.~~ **Resolved:** a single global token is
    persisted in `<DATABASE>.<SYNC_STATE_TABLE>` (see `sync_state.py`) and
    only advanced after every scope's output table for the current run has
