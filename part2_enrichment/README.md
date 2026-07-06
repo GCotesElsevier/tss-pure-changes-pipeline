@@ -96,12 +96,60 @@ organizations, publishers, events), and resolves the record's FAR
 - `hbku/test_grants_transform.py` — same diagnostic pattern, using Part 1's
   real Grants change (currently 1, a `Project`) — confirmed it has a real
   linked Award.
+- `participant_explode.py` — shared explode logic for `contributors`
+  (Research Output) / `persons` (Custom Sections) / `participants` (Grants):
+  all 3 transform configs deliberately leave these raw (see each config's
+  docstring), so extraction happens once here instead of 3 near-identical
+  times. Also resolves each internal participant's FAR `faculty_id` by
+  joining `sync_persons` on `person_uuid` to get an email, then looking it
+  up against the FAR users directory. **Named `faculty_id`, not
+  `primary_id`**: `sync_persons.primary_id` already means something else
+  (Pure's own internal `PrimaryId` identifier type) — reusing the name
+  would silently collide the two concepts. Validated locally with synthetic
+  contributor/external-person records. **Grants' `participants`/
+  `awardHolders` item shape is assumed** to match contributors/persons
+  (`person`/`externalPerson` + `name` + `role`) by analogy — not yet
+  confirmed against a real Grants record with participants (none seen in
+  Part 1 so far).
+- `hbku/enrich_changes.py` — the main orchestration notebook. Reads today's
+  `changes_<scope>_<CURRENT_DAY>` table per scope (same `CURRENT_DAY` as
+  Part 1's `fetch_changes.py`, since both run in the same pipeline
+  execution — no "latest table" search needed). For non-DELETE records:
+  fetches full records, applies the transform config, joins
+  publisher/event/organization names from the `sync_*` tables, explodes
+  participants + resolves `faculty_id`. DELETE records are **not**
+  enriched (the Pure record is already gone — nothing to fetch, no
+  reliable way to know whose it was) — saved as a minimal `uuid` + `scope`
+  + `changeType` table per scope, for audit/log purposes only; Part 3
+  decides what to do with them.
+
+  Output tables (mirrors `tss-dedup`'s `processed_*` shape, `enriched_`
+  prefix so nothing collides with `ip-pure2far-integration`'s tables):
+  - `enriched_research_output_<date>` + `enriched_research_output_authors_<date>`
+  - `enriched_custom_sections_<date>` — participants exploded **in place**
+    (one row per activity+participant, no separate table — matches the
+    original `ActivityDataProcessor`, confirmed with the user rather than
+    assumed, since it's a real deviation from how Research Output/Grants
+    handle their own author lists)
+  - `enriched_grants_<date>` + `enriched_grants_participants_<date>`
+  - `enriched_<scope>_deletes_<date>` (all 3 scopes, same minimal shape)
+
+  **Deliberately not replicated from the old pipeline** (left for Part 3,
+  or just not requested): `title`+`subTitle` merge, `status_date`
+  construction, numeric casts, `role` uppercasing, Research Output's own
+  `organizations` field resolved to names (stays a joined uuid string, same
+  as the original), event `sponsorOrganizations` resolved to a sponsor
+  name.
+
+  Validated locally (no spark/dbutils needed) by running the real
+  transform configs + `participant_explode.py` end-to-end against
+  synthetic records for all 3 scopes before touching Databricks.
 
 ## Still to build
 
-- `hbku/enrich_changes.py` — the main orchestration notebook: reads Part 1's
-  latest changes tables, fetches full records (via `grants_merge.py` for
-  Grants), applies the transform config, joins entities (from `sync_*`
-  tables above) + FAR `primary_id`, explodes authors (Scholarly Activities
-  and Grants only — Custom Sections has no author table), and outputs the
-  enriched batch for Part 3.
+- Run `enrich_changes.py` in Databricks against real Part 1 output and
+  confirm the joins/explode work against real data (so far only validated
+  with synthetic records locally, plus each scope's transform config
+  separately against real HBKU data).
+- Part 3 (`part3_load/`) — adapts `tss-dedup`'s `Step3_Postprocessor` to
+  consume these `enriched_*` tables instead of `processed_*`.

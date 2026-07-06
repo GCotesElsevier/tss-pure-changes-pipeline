@@ -1,4 +1,6 @@
 # Databricks notebook source
+from datetime import datetime
+
 LEGACY_API_KEY = dbutils.secrets.get(scope='integration-delivery-services', key='pure-hbku_legacy-prod-api-key')
 LEGACY_URL = dbutils.secrets.get(scope='integration-delivery-services', key='pure-hbku_legacy-base-url')
 
@@ -34,3 +36,9 @@ EXTERNAL_ORG_TABLE = "sync_external_organizations"
 # without any ingest_ts rows). Same rationale as
 # part1_changes/hbku/config.py's DEFAULT_SINCE_DATE.
 DEFAULT_SINCE_DATETIME = "2026-07-01T00:00:00.000Z"
+
+# Same formula as part1_changes/hbku/config.py's CURRENT_DAY. enrich_changes.py
+# runs right after fetch_changes.py in the same pipeline execution, same day,
+# so it reads changes_<scope>_<CURRENT_DAY> directly instead of searching for
+# the "latest" table by listing and sorting.
+CURRENT_DAY = datetime.now().strftime("%Y%m%d")
