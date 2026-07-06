@@ -14,6 +14,13 @@
 # COMMAND ----------
 
 import requests
+import urllib3
+
+# Both clients below call `verify=False` (matching Part 1 and every other
+# repo talking to this Pure instance) since Elsevier's certificate for
+# elmi.hbku.edu.qa is not validated here. Silenced once at import time so
+# every notebook using these clients doesn't need to remember to do it.
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # COMMAND ----------
 
