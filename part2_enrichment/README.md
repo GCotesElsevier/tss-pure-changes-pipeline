@@ -29,18 +29,32 @@ organizations, publishers, events), and resolves the record's FAR
 - `far_users_client.py` — `FARUsersClient.fetch_all_users()`, trimmed from
   `tss-dedup`'s `FAR_API_Client` (no `fetch_user_activities`: there is no
   PURE-vs-FAR matching step in this pipeline anymore).
+- `entity_transforms.py` — flattening functions for the 4 supporting entity
+  shapes (`process_person`, `process_publisher`, `process_event`,
+  `process_organization` — shared by Internal and External organizations),
+  ported from `Transformer.process_persons` etc. in
+  `ip-pure2far-integration`, with `language` as an explicit parameter
+  instead of the original's mutable class-level state.
+- `entity_sync.py` — `sync_entity(...)`, one reusable, idempotent sync
+  function per entity: full load the first time (or always, for
+  `InternalOrganization` — Pure's legacy API has no incremental query for
+  it), incremental after that based on the table's own `ingest_ts`. No
+  separate initial-load notebook to remember to run only once.
+- `hbku/config.py` — secrets/constants for Part 2 (new Pure API key + base
+  URL, FAR HMAC keys, database, `sync_*` table names).
+- `hbku/sync_entities.py` — orchestration notebook: syncs all 5 supporting
+  entities into `sync_persons` / `sync_events` / `sync_publishers` /
+  `sync_internal_organizations` / `sync_external_organizations`. These are
+  intentionally prefixed `sync_` so they never collide with
+  `ip-pure2far-integration`'s own un-prefixed tables in the same catalog.
 
 ## Still to build
 
-- `hbku/config.py` — secrets/constants for Part 2 (new Pure API key, FAR
-  HMAC keys, database).
-- `hbku/sync_entities.py` — initial + incremental sync notebook for Person,
-  Event, Publisher, InternalOrganization, ExternalOrganization.
 - JSON transform configs per scope/subtype in `cfgs/`, replacing
   `process_subtype_data` / `process_activities` / `GRANTS_CONFIG` from
   `ip-pure2far-integration` with the unified engine's format.
 - `hbku/enrich_changes.py` — the main orchestration notebook: reads Part 1's
   latest changes tables, fetches full records, applies the transform config,
-  joins entities + FAR `primary_id`, explodes authors (Scholarly Activities
-  and Grants only — Custom Sections has no author table), and outputs the
-  enriched batch for Part 3.
+  joins entities (from `sync_*` tables above) + FAR `primary_id`, explodes
+  authors (Scholarly Activities and Grants only — Custom Sections has no
+  author table), and outputs the enriched batch for Part 3.
