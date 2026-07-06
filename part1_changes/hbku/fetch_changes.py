@@ -34,6 +34,14 @@ import urllib3
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# Arrow-optimized createDataFrame hit a "Cannot grow BufferHolder by size -32"
+# error converting one of the small per-scope pandas DataFrames below (Grants,
+# Custom Sections) — it silently fell back and wrote a single fully-null row
+# instead of raising, even though the pandas data itself was correct (verified
+# directly). tss-dedup disables Arrow for exactly this kind of conversion;
+# doing the same here instead of relying on the fallback path.
+spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "false")
+
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 for handler in logger.handlers[:]:
