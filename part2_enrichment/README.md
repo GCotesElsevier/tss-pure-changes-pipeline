@@ -131,7 +131,7 @@ organizations, publishers, events), and resolves the record's FAR
     original `ActivityDataProcessor`, confirmed with the user rather than
     assumed, since it's a real deviation from how Research Output/Grants
     handle their own author lists)
-  - `enriched_grants_<date>` + `enriched_grants_participants_<date>`
+  - `enriched_grants_<date>` + `enriched_grants_authors_<date>`
   - `enriched_<scope>_deletes_<date>` (all 3 scopes, same minimal shape)
 
   **Deliberately not replicated from the old pipeline** (left for Part 3,

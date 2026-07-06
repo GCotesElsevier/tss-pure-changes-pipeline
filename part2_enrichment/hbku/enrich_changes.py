@@ -33,7 +33,7 @@
 # MAGIC - `enriched_custom_sections_<date>` (participants exploded IN PLACE — one
 # MAGIC   row per activity+participant, no separate table, same as the original
 # MAGIC   `ActivityDataProcessor`)
-# MAGIC - `enriched_grants_<date>` + `enriched_grants_participants_<date>`
+# MAGIC - `enriched_grants_<date>` + `enriched_grants_authors_<date>`
 # MAGIC - `enriched_<scope>_deletes_<date>` (all 3 scopes, same minimal shape)
 # MAGIC
 # MAGIC **Known gaps / deliberately NOT replicated from the old pipeline**
@@ -246,7 +246,11 @@ def build_org_name_map(uuid_series: pd.Series) -> pd.Series:
 
 
 def save_table(df: pd.DataFrame, table_name: str) -> None:
-    safe_save_table(spark, logger, df, f"{DATABASE}.{table_name}")
+    full_table_name = f"{DATABASE}.{table_name}"
+    if df.empty:
+        logger.info("Nothing to save for %s — skipping (no dated table created for today).", full_table_name)
+        return
+    safe_save_table(spark, logger, df, full_table_name)
 
 # COMMAND ----------
 
@@ -307,11 +311,11 @@ def process_grants(changes_rows: pd.DataFrame):
     flat = flatten_dataframe(merged_records)
     result = apply_transforms(flat, GRANTS_TRANSFORM_CONFIG, context={"external_organizations": external_orgs_df})
 
-    participants = explode_participants(result, id_column="uuid", list_column="participants", language=LANGUAGE)
-    participants = attach_faculty_id(participants, persons_df, email_to_faculty_id)
+    authors = explode_participants(result, id_column="uuid", list_column="participants", language=LANGUAGE)
+    authors = attach_faculty_id(authors, persons_df, email_to_faculty_id)
 
     result = result.drop(columns=["participants"])
-    return result, participants
+    return result, authors
 
 # COMMAND ----------
 
@@ -348,9 +352,9 @@ grants_changes = read_changes_table("grants")
 grants_non_deletes, grants_deletes = split_deletes(grants_changes)
 logger.info("[grants] %d to enrich, %d deletes", len(grants_non_deletes), len(grants_deletes))
 
-grants_df, grants_participants_df = process_grants(grants_non_deletes)
+grants_df, grants_authors_df = process_grants(grants_non_deletes)
 grants_deletes_df = build_deletes_table(grants_deletes, "grants")
 
 save_table(grants_df, f"enriched_grants_{CURRENT_DAY}")
-save_table(grants_participants_df, f"enriched_grants_participants_{CURRENT_DAY}")
+save_table(grants_authors_df, f"enriched_grants_authors_{CURRENT_DAY}")
 save_table(grants_deletes_df, f"enriched_grants_deletes_{CURRENT_DAY}")
