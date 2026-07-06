@@ -29,8 +29,14 @@
 import json
 import os
 
-repo_root = os.path.normpath(os.path.join(os.getcwd(), "..", ".."))
-with open(os.path.join(repo_root, "cfgs", "HBKU_cfg_transform_research_output.json")) as f:
+# One level up (part2_enrichment/), not two: Databricks Repos in this
+# workspace only exposes plain filesystem access (open/os.listdir) within
+# the executing notebook's own top-level folder, not sibling folders at
+# the repo root — confirmed by direct diagnostics against a real repo
+# clone. cfgs/ lives inside part2_enrichment/ for that reason, not at the
+# repo root.
+part_root = os.path.normpath(os.path.join(os.getcwd(), ".."))
+with open(os.path.join(part_root, "cfgs", "HBKU_cfg_transform_research_output.json")) as f:
     research_output_config = json.load(f)
 
 # COMMAND ----------

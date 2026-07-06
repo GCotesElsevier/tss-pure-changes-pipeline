@@ -16,7 +16,7 @@
 - `hbku/fetch_changes.py` — the orchestration notebook. No `SCOPE` widget:
   every run fetches the changes stream once (filtered to the union of all
   families across scopes), tags each event with its scope via
-  `cfgs/HBKU_cfg_changes.json`, de-duplicates by `uuid`, saves one output
+  `part1_changes/cfgs/HBKU_cfg_changes.json`, de-duplicates by `uuid`, saves one output
   table per scope, and only then persists the new resumption token.
 - `hbku/discover_families.py` — one-off diagnostic notebook: pulls the
   **unfiltered** changes stream and reports the distinct `familySystemName`

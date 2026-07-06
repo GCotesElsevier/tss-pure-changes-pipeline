@@ -25,16 +25,25 @@ The pipeline has three parts, each a module in this repo:
 
 The pipeline covers the same three scopes as the existing dedup pipeline:
 Scholarly Activities, Grants, and Custom Sections. Pure's `familySystemName`
-values for each scope are homologated in `cfgs/HBKU_cfg_changes.json`.
+values for each scope are homologated in
+`part1_changes/cfgs/HBKU_cfg_changes.json`.
 
 ## Repository layout
 
-- `cfgs/` — JSON configuration files (per client, per step). Institutional
-  logic belongs here, not hardcoded in Python.
 - `part1_changes/`, `part2_enrichment/`, `part3_load/` — one folder per
   pipeline stage. Shared logic (client classes, transform engine) lives at
   the root of each folder; client-specific settings and orchestration
   notebooks live in a per-client subfolder (e.g. `hbku/`).
+- **`cfgs/` lives inside each part's own folder** (e.g.
+  `part1_changes/cfgs/`, `part2_enrichment/cfgs/`), not shared at the repo
+  root. This workspace's Databricks Repos only exposes plain filesystem
+  access (`open()` / `os.listdir()`) within the executing notebook's own
+  top-level folder — a sibling folder like a repo-root `cfgs/` is
+  invisible to a notebook nested under a different top-level folder, even
+  though it shows fine in the Repos UI. Confirmed by direct diagnostics
+  against a real clone (`os.listdir` / `dbutils.fs.ls` both come back
+  empty for a repo-root `cfgs/` from inside `part2_enrichment/hbku/`, but
+  work for a `cfgs/` folder living inside `part2_enrichment/` itself).
 
 ## Conventions
 

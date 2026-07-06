@@ -43,9 +43,15 @@ logger.propagate = False
 
 # COMMAND ----------
 
-repo_root = os.path.normpath(os.path.join(os.getcwd(), "..", ".."))
+# One level up (part1_changes/), not two: Databricks Repos in this
+# workspace only exposes plain filesystem access (open/os.listdir) within
+# the executing notebook's own top-level folder, not sibling folders at
+# the repo root — confirmed by direct diagnostics against a real repo
+# clone. cfgs/ lives inside part1_changes/ for that reason, not at the
+# repo root.
+part_root = os.path.normpath(os.path.join(os.getcwd(), ".."))
 
-with open(os.path.join(repo_root, "cfgs", "HBKU_cfg_changes.json")) as f:
+with open(os.path.join(part_root, "cfgs", "HBKU_cfg_changes.json")) as f:
     cfg = json.load(f)
 
 # Union of every family we care about, plus the reverse lookup used to tag

@@ -3,7 +3,7 @@
 # MAGIC # Part 1 — Discover Pure change families
 # MAGIC One-off diagnostic: pulls the **unfiltered** changes stream over a
 # MAGIC short window and reports the distinct `familySystemName` values seen,
-# MAGIC so the scope -> family mapping in `cfgs/HBKU_cfg_changes.json` can be
+# MAGIC so the scope -> family mapping in `part1_changes/cfgs/HBKU_cfg_changes.json` can be
 # MAGIC confirmed against real data instead of inferred from REST endpoint
 # MAGIC names.
 # MAGIC

@@ -48,11 +48,21 @@ organizations, publishers, events), and resolves the record's FAR
   intentionally prefixed `sync_` so they never collide with
   `ip-pure2far-integration`'s own un-prefixed tables in the same catalog.
 
+- `cfgs/HBKU_cfg_transform_research_output.json` — transform config covering
+  all 7 Scholarly Activities subtypes (they share one raw JSON shape in
+  Pure; subtype-specific column selection happens in Part 3). Lives inside
+  `part2_enrichment/`, not a repo-root `cfgs/` — see the root README's
+  "Repository layout" section for why (a real Databricks Repos filesystem
+  limitation in this workspace, not a style choice).
+- `hbku/test_research_output_transform.py` — one-off diagnostic: runs the
+  config above against real records fetched via `PureAPI`, using uuids
+  already sitting in Part 1's changes table.
+
 ## Still to build
 
-- JSON transform configs per scope/subtype in `cfgs/`, replacing
-  `process_subtype_data` / `process_activities` / `GRANTS_CONFIG` from
-  `ip-pure2far-integration` with the unified engine's format.
+- `cfgs/` configs for Activity and Grants, replacing `process_activities` /
+  `GRANTS_CONFIG` from `ip-pure2far-integration` with the unified engine's
+  format.
 - `hbku/enrich_changes.py` — the main orchestration notebook: reads Part 1's
   latest changes tables, fetches full records, applies the transform config,
   joins entities (from `sync_*` tables above) + FAR `primary_id`, explodes
