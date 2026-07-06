@@ -7,10 +7,10 @@
 # MAGIC be just as expensive without telling us anything new faster.
 # MAGIC
 # MAGIC Instead, this checks directly against Pure's legacy `awards` endpoint
-# MAGIC (server-side filtered by `modifiedAfter`, uuid-only response — cheap)
-# MAGIC whether any award was created or modified recently at all. If none
-# MAGIC were, the absence of `Award` events in the changes stream is explained
-# MAGIC by low volume rather than a wrong family name.
+# MAGIC (server-side filtered by `createdAfter`, uuid-only response — cheap)
+# MAGIC whether any award was created recently at all. If none were, the
+# MAGIC absence of `Award` events in the changes stream is explained by low
+# MAGIC volume rather than a wrong family name.
 # MAGIC
 # MAGIC One-off diagnostic; not part of the regular pipeline.
 
@@ -39,7 +39,11 @@ logger.propagate = False
 
 # COMMAND ----------
 
-def build_incremental_payload(query_field: str, date_filter_name: str, date_filter: str, size: int = 100) -> str:
+def build_incremental_payload(query_field: str, date_filter: str, size: int = 100) -> str:
+    # `createdAfter` is hardcoded here, not a parameter: Pure's legacy XML
+    # query for this endpoint rejected `modifiedAfter` with a 400 — mirrors
+    # `LegacyPureAPI.build_payload` in ip-pure2far-integration's
+    # `grants_integration_upd` branch, which hardcodes the same tag.
     return f"""
         <{query_field}>
         <size>{size}</size>
@@ -47,7 +51,7 @@ def build_incremental_payload(query_field: str, date_filter_name: str, date_filt
         <fields>
             <field>uuid</field>
         </fields>
-        <{date_filter_name}>{date_filter}</{date_filter_name}>
+        <createdAfter>{date_filter}</createdAfter>
         </{query_field}>
     """
 
@@ -56,12 +60,12 @@ def count_recent_records(base_url: str, api_key: str, end_point: str, query_fiel
     """
     Lightweight check against Pure's legacy incremental query for a single
     entity endpoint (e.g. `awards`) — server-side filtered by
-    `modifiedAfter` and uuid-only, so it is much cheaper than paging the
+    `createdAfter` and uuid-only, so it is much cheaper than paging the
     full, unfiltered changes stream.
     """
     url = f"{base_url}/{end_point}"
     headers = {"accept": "application/json", "Content-Type": "application/xml", "api-key": api_key}
-    payload = build_incremental_payload(query_field, "modifiedAfter", since_date)
+    payload = build_incremental_payload(query_field, since_date)
     response = requests.post(url, headers=headers, data=payload, verify=False)
     response.raise_for_status()
     return response.json().get("count", 0)
