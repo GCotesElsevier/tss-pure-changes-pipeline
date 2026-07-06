@@ -13,10 +13,13 @@
   run processes every scope at once.
 - `hbku/config.py` — HBKU-specific secrets and constants (legacy API key,
   base URL, target database, sync-state table name, default start date).
+- `cfgs/HBKU_cfg_changes.py` — scope -> Pure family homologation
+  (`CHANGES_CONFIG`). A `.py` file, not `.json` — see the root README's
+  "Conventions" section for why.
 - `hbku/fetch_changes.py` — the orchestration notebook. No `SCOPE` widget:
   every run fetches the changes stream once (filtered to the union of all
   families across scopes), tags each event with its scope via
-  `part1_changes/cfgs/HBKU_cfg_changes.json`, de-duplicates by `uuid`, saves one output
+  `cfgs/HBKU_cfg_changes.py`, de-duplicates by `uuid`, saves one output
   table per scope, and only then persists the new resumption token.
 - `hbku/discover_families.py` — one-off diagnostic notebook: pulls the
   **unfiltered** changes stream and reports the distinct `familySystemName`

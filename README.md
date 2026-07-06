@@ -26,7 +26,7 @@ The pipeline has three parts, each a module in this repo:
 The pipeline covers the same three scopes as the existing dedup pipeline:
 Scholarly Activities, Grants, and Custom Sections. Pure's `familySystemName`
 values for each scope are homologated in
-`part1_changes/cfgs/HBKU_cfg_changes.json`.
+`part1_changes/cfgs/HBKU_cfg_changes.py`.
 
 ## Repository layout
 
@@ -36,22 +36,28 @@ values for each scope are homologated in
   notebooks live in a per-client subfolder (e.g. `hbku/`).
 - **`cfgs/` lives inside each part's own folder** (e.g.
   `part1_changes/cfgs/`, `part2_enrichment/cfgs/`), not shared at the repo
-  root. This workspace's Databricks Repos only exposes plain filesystem
-  access (`open()` / `os.listdir()`) within the executing notebook's own
-  top-level folder — a sibling folder like a repo-root `cfgs/` is
-  invisible to a notebook nested under a different top-level folder, even
-  though it shows fine in the Repos UI. Confirmed by direct diagnostics
-  against a real clone (`os.listdir` / `dbutils.fs.ls` both come back
-  empty for a repo-root `cfgs/` from inside `part2_enrichment/hbku/`, but
-  work for a `cfgs/` folder living inside `part2_enrichment/` itself).
+  root — see "Conventions" below for why.
 
 ## Conventions
 
 - All code, comments, file and folder names are in English.
-- Shared logic and configuration live in `.py` / `.json` files; the actual
-  pipeline runs are Databricks notebooks in source format (`.py` files with
-  a `# Databricks notebook source` header and `# COMMAND ----------` cell
-  separators), matching the existing `ip-pure2far-integration` repo.
+- **Institutional config is a plain data file, not a `.json` file.** Every
+  config (`cfgs/HBKU_cfg_*.py`) is a `.py` file with a `# Databricks
+  notebook source` header holding nothing but a dict/constant assignment,
+  loaded via `%run` — no logic, same intent as a JSON config, just a
+  different extension. This was forced by a real limitation confirmed
+  directly against this workspace's Databricks Repos: plain files (`.json`,
+  `.csv`, etc.) are visible in the Repos UI but are **not** reliably
+  readable via `open()` / `os.listdir()` / `dbutils.fs.ls()` from a running
+  notebook, regardless of which folder they're in — only files Databricks
+  recognizes as notebooks (`.py` with this header, `.ipynb`, `.sql`, `.r`)
+  resolve reliably, via `%run`. `tss-dedup` never hit this because its
+  notebooks read `.json` configs living in the exact same folder as
+  themselves at the repo root; nothing in this repo does that.
+- The actual pipeline runs are Databricks notebooks in source format (`.py`
+  files with a `# Databricks notebook source` header and
+  `# COMMAND ----------` cell separators), matching the existing
+  `ip-pure2far-integration` repo.
 - This repo has no local execution path: secrets, source tables, and the
   target catalog all live in Databricks, so it must be connected via
   Databricks Repos to actually run.
