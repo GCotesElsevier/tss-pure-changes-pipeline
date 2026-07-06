@@ -63,6 +63,10 @@
 
 # COMMAND ----------
 
+# MAGIC %run ../spark_utils
+
+# COMMAND ----------
+
 # MAGIC %run ../transform_engine
 
 # COMMAND ----------
@@ -242,14 +246,7 @@ def build_org_name_map(uuid_series: pd.Series) -> pd.Series:
 
 
 def save_table(df: pd.DataFrame, table_name: str) -> None:
-    full_table_name = f"{DATABASE}.{table_name}"
-    if df.empty:
-        logger.info("Nothing to save for %s — skipping.", full_table_name)
-        return
-    clean_df = df.astype(object).where(pd.notnull(df), None)
-    spark_df = spark.createDataFrame(clean_df)
-    spark_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(full_table_name)
-    logger.info("Saved %d rows to %s", len(df), full_table_name)
+    safe_save_table(spark, logger, df, f"{DATABASE}.{table_name}")
 
 # COMMAND ----------
 
