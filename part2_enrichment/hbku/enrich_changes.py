@@ -323,6 +323,14 @@ def process_custom_sections(uuids: list) -> pd.DataFrame:
     flat = flatten_dataframe(raw_records)
     result = apply_transforms(flat, ACTIVITY_TRANSFORM_CONFIG)
 
+    # ACTIVITY_TRANSFORM_CONFIG's "type" is "{typeDiscriminator}: {term}"
+    # (e.g. "Service: Professional") -- the same value tss-dedup's own
+    # Step0 renames to "subtype" for Custom Sections (and fixes "type" to
+    # the literal "Custom Sections"), since Part 3's per-type filtering
+    # expects a "subtype" column, same as Research Output/Grants.
+    result = result.rename(columns={"type": "subtype"})
+    result["type"] = "Custom Sections"
+
     result["managing_organization"] = build_org_name_map(result["managing_organization_uuid"])
     result["member_of_name"] = build_org_name_map(result["member_of_uuid"])
     result = result.drop(columns=["managing_organization_uuid", "member_of_uuid"])
