@@ -52,16 +52,29 @@ organizations, publishers, events), and resolves the record's FAR
   (`RESEARCH_OUTPUT_TRANSFORM_CONFIG`) covering all 7 Scholarly Activities
   subtypes (they share one raw JSON shape in Pure; subtype-specific column
   selection happens in Part 3). A `.py` file, not `.json` — see the root
-  README's "Conventions" section for why.
+  README's "Conventions" section for why. **Validated end-to-end against
+  real HBKU data** (Article, Review article, Conference contribution
+  subtypes all extracted correctly).
 - `hbku/test_research_output_transform.py` — one-off diagnostic: runs the
   config above against real records fetched via `PureAPI`, using uuids
   already sitting in Part 1's changes table.
+- `cfgs/HBKU_cfg_transform_activity.py` — transform config
+  (`ACTIVITY_TRANSFORM_CONFIG`) covering all 4 Custom Sections subtypes.
+  Ported from `Transformer.process_activities`. `persons` (the participant
+  list) and organization-name resolution are left for the orchestration
+  notebook, same reasoning as `contributors` in the research output config.
+  Validated locally against synthetic records (external- and
+  internal-organization `memberOf` cases).
+- `hbku/test_activity_transform.py` — same diagnostic pattern, against
+  Part 1's Custom Sections changes table (only ~2 real events seen so far,
+  per Part 1's low-volume finding).
 
 ## Still to build
 
-- `cfgs/` configs for Activity and Grants, replacing `process_activities` /
-  `GRANTS_CONFIG` from `ip-pure2far-integration` with the unified engine's
-  format.
+- `cfgs/` config for Grants, replacing `GRANTS_CONFIG` from
+  `ip-pure2far-integration` with the unified engine's format (this one
+  should be the easiest: `GRANTS_CONFIG` was already declarative, just
+  needs adapting to this engine's exact action names).
 - `hbku/enrich_changes.py` — the main orchestration notebook: reads Part 1's
   latest changes tables, fetches full records, applies the transform config,
   joins entities (from `sync_*` tables above) + FAR `primary_id`, explodes

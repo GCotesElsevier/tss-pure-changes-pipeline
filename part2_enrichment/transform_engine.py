@@ -28,16 +28,22 @@
 # MAGIC - `fill_from` — copies another column's value where the field is null
 # MAGIC - `cast` — `to_type` one of `datetime`, `date`, `string`, `int`, `float`
 # MAGIC - `fill_null` — replaces null (and empty string) with a constant
-# MAGIC - `extract_from_list` — pulls a value out of a list of dicts, optionally
-# MAGIC   matching on a nested key first (`match.path` / `match.equals`);
-# MAGIC   `match.fallback: "first_item"` uses the list's first item if nothing
-# MAGIC   matches, instead of `default`
+# MAGIC - `extract_from_list` — pulls a value out of a list (of dicts, or of
+# MAGIC   plain scalars if `value_path` is `[]`), optionally matching on a
+# MAGIC   nested key first (`match.path` / `match.equals`); without a match,
+# MAGIC   uses the first item; `match.fallback: "first_item"` uses the first
+# MAGIC   item if nothing matches, instead of `default`
 # MAGIC - `join_from_list` — pulls a value from EVERY item in a list and joins
 # MAGIC   them with `separator` (default `"; "`); `value_path` for a single
 # MAGIC   nested key per item (`[]` means the item itself, for plain string
 # MAGIC   lists), or `value_paths` (a list of paths) to join multiple fields
 # MAGIC   per item first with `item_separator` (e.g. first/last name);
 # MAGIC   `dedupe: true` drops repeated values before joining
+# MAGIC - `concat_fields` — joins OTHER already-existing columns (not list
+# MAGIC   items — see `join_from_list` for that) into one new field with
+# MAGIC   `separator`, skipping any that are null/blank (e.g. combining
+# MAGIC   Activity's separate `typeDiscriminator` and `type.term.en_GB` into
+# MAGIC   one `"ServiceActivity: Professional"`-style field)
 # MAGIC - `lookup_from_dataframe` — enriches by joining against another
 # MAGIC   DataFrame passed in `context`
 # MAGIC - `map_values` — dictionary-based value mapping, with an optional
@@ -194,20 +200,40 @@ def apply_transforms(df: pd.DataFrame, config: dict, context: dict = None) -> pd
                         # one entry `current: true`, but falls back to the
                         # first entry when none is flagged that way).
                         if match.get("fallback") == "first_item":
-                            item = cell[0]
-                            if not isinstance(item, dict):
-                                return default
-                            value = get_by_path(item, value_path)
+                            value = get_by_path(cell[0], value_path)
                             return value if value is not None else default
                         return default
 
-                    item = cell[0]
-                    if not isinstance(item, dict):
-                        return default
-                    value = get_by_path(item, value_path)
+                    # No match requested: just use the first item. get_by_path
+                    # already handles a plain scalar/string item correctly
+                    # (an empty value_path returns it as-is; a non-empty path
+                    # against a non-dict item safely returns None), so this
+                    # works for lists of dicts and lists of plain values alike
+                    # (e.g. Pure's prettyUrlIdentifiers, a list of strings).
+                    value = get_by_path(cell[0], value_path)
                     return value if value is not None else default
 
                 df[target] = df[field].apply(extract)
+
+            elif action_type == "concat_fields":
+                # Joins OTHER columns (not list items — see join_from_list
+                # for that) into one new field, e.g. Pure's Activity records
+                # split typeDiscriminator ("ServiceActivity") and
+                # type.term.en_GB ("Professional") into two separate top-level
+                # fields that need combining into one "Type: term" string.
+                fields_to_join = action["fields"]
+                separator = action.get("separator", " ")
+                target = action.get("to", field)
+
+                missing = [f for f in fields_to_join if f not in df.columns]
+                if missing:
+                    raise ValueError(f"concat_fields: field(s) {missing} not in DataFrame yet")
+
+                def concat_row(row, fields_to_join=fields_to_join, separator=separator):
+                    parts = [str(row[f]) for f in fields_to_join if pd.notna(row[f]) and str(row[f]).strip()]
+                    return separator.join(parts) if parts else None
+
+                df[target] = df.apply(concat_row, axis=1)
 
             elif action_type == "join_from_list":
                 # Unlike extract_from_list (one value from one item),
