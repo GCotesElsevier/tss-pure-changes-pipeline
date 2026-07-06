@@ -2,7 +2,7 @@
 from datetime import datetime
 
 LEGACY_API_KEY = dbutils.secrets.get(scope='integration-delivery-services', key='pure-hbku_legacy-prod-api-key')
-LEGACY_URL = 'https://elmi.hbku.edu.qa/ws/api/524'
+LEGACY_URL = dbutils.secrets.get(scope='integration-delivery-services', key='pure-hbku_legacy-base-url')
 
 DATABASE = "academicinformationsystems_technicalservices.hbku"
 SYNC_STATE_TABLE = "changes_sync_state"
