@@ -79,22 +79,23 @@ organizations, publishers, events), and resolves the record's FAR
   (rare; 0 seen in Part 1's 30-day check) is processed alone for now.
 - `cfgs/HBKU_cfg_transform_grants.py` — transform config
   (`GRANTS_TRANSFORM_CONFIG`), close to a direct translation of
-  `GRANTS_CONFIG` (already declarative in the original). Validated locally
-  against a synthetic merged Project+Award record (uuid/pureId fallback,
-  `awardStatus` / `internal_external` mapping, `fundings` extraction, the
-  `lookup_from_dataframe` sponsor lookup, and `map_values` with `__SELF__`
-  all confirmed working) — some fields came back null in that test only
-  because the synthetic data didn't mirror which fields real Pure Awards
-  and Projects share (unconfirmed without real Award data), not because of
-  a code bug.
+  `GRANTS_CONFIG` (already declarative in the original). **Validated
+  end-to-end against real HBKU data**: the one real Grants change (a
+  Project) does have a linked Award, found via `grants_merge.py`, and the
+  full merge + transform produced correct results — `uuid`/`pureId`
+  fallback, `awardStatus`/`internal_external`/`grantType` mappings,
+  `fundings` extraction (a real ~1.8M QAR award), the `lookup_from_dataframe`
+  sponsor lookup against the real `sync_external_organizations` table, and
+  `typeDisc` all correct.
   **Inherited limitation:** `fundingType`'s mapping is an exact,
   case-sensitive string match against a hardcoded sponsor-name list from
   `ip-pure2far-integration` — any mismatch in casing/punctuation silently
   falls through to `"__SELF__"` (the sponsor's own name used as the
-  funding type). Ported as-is, not something introduced here.
+  funding type). Ported as-is, not something introduced here; happened to
+  match correctly for the one real sponsor seen so far (QNRF).
 - `hbku/test_grants_transform.py` — same diagnostic pattern, using Part 1's
-  real Grants change (currently 1, a `Project`) — also the first real look
-  at whether that Project has a linked Award at all.
+  real Grants change (currently 1, a `Project`) — confirmed it has a real
+  linked Award.
 
 ## Still to build
 
