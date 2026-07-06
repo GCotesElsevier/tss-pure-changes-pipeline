@@ -24,13 +24,21 @@
 
 ## Open design points
 
-1. **Family names per scope.** Only `ResearchOutput` (Scholarly Activities)
-   has been confirmed against a live call to the changes endpoint. `Award` /
-   `Project` (Grants) and `Activity` (Custom Sections) in
-   `cfgs/HBKU_cfg_changes.json` are inferred from the REST endpoint names
-   used elsewhere in `ip-pure2far-integration` and still need to be
-   confirmed against real changes-stream output using
-   `hbku/discover_families.py`.
+1. **Family names per scope.** Confirmed against a live, unfiltered run of
+   `hbku/discover_families.py` over 2026-07-01 → 2026-07-06:
+   `ResearchOutput` (Scholarly Activities, 5,752 events), `Activity` (Custom
+   Sections, 2 events), and `Project` (Grants, 1 event) all appeared exactly
+   as configured. `Award` (Grants) did **not** appear in this window — with
+   only 1 `Project` event in 5 days, that is plausibly just low volume rather
+   than a wrong family name (it is a real Pure content type, mirrored by the
+   separate `awards` endpoint in `ip-pure2far-integration`), but it remains
+   unconfirmed. Re-run `discover_families.py` with an earlier `SINCE_DATE`
+   (up to Pure's 30-day window) if firmer confirmation is needed before
+   relying on it in Part 2.
+   Also observed: `InternalOrganization`/`Organisation` never appeared in
+   this window either (only `ExternalOrganisation` did) — irrelevant to
+   Part 1's 3 scopes, but worth remembering for Part 2, since internal org
+   changes may not surface reliably through this stream.
 2. ~~Resumption token persistence.~~ **Resolved:** a single global token is
    persisted in `<DATABASE>.<SYNC_STATE_TABLE>` (see `sync_state.py`) and
    only advanced after every scope's output table for the current run has
