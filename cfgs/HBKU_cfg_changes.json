@@ -1,0 +1,11 @@
+{
+  "Scholarly Activities": {
+    "pure_families": ["ResearchOutput"]
+  },
+  "Grants": {
+    "pure_families": ["Award", "Project"]
+  },
+  "Custom Sections": {
+    "pure_families": ["Activity"]
+  }
+}

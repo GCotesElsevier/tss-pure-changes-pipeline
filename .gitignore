@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.databricks/
+.vscode/
+.env
+venv/
+staging/*.csv
+staging/*/
