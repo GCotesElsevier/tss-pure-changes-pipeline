@@ -215,6 +215,29 @@ def save_table(df: pd.DataFrame, table_name: str) -> None:
         return
     safe_save_table(spark, logger, df, full_table_name)
 
+
+def log_unmapped_subtypes(df: pd.DataFrame, subtype_column: str, known_types, scope_label: str) -> None:
+    """
+    Flags real records whose subtype isn't one of this scope's known FAR
+    types (e.g. a Custom Sections `typeDiscriminator` tss-dedup's original
+    config never covered) -- these are silently skipped by the per-type
+    loop below with no template to run them through, so without this they'd
+    just vanish with no visibility. Real case hit: a Custom Sections record
+    with subtype "EditorialWork: Publication Peer-review", not one of the
+    4 known Service/Other types.
+    """
+    if df.empty:
+        return
+    unmapped = df[~df[subtype_column].isin(known_types)]
+    if unmapped.empty:
+        return
+    unmapped_subtypes = sorted(unmapped[subtype_column].dropna().unique().tolist())
+    logger.warning(
+        "[%s] %d record(s) changed today have a subtype with no FAR template mapped yet -- "
+        "skipped, not exported: %s",
+        scope_label, len(unmapped), unmapped_subtypes,
+    )
+
 # COMMAND ----------
 
 # MAGIC %md
@@ -228,6 +251,7 @@ research_output_df = read_enriched_table(f"enriched_research_output_{CURRENT_DAY
 research_output_authors_df = read_enriched_table(f"enriched_research_output_authors_{CURRENT_DAY}")
 
 if not research_output_df.empty:
+    log_unmapped_subtypes(research_output_df, "subtype", scholarly_cfg["subtype_to_type"].keys(), "scholarly_activities")
     research_output_df = research_output_df.assign(type=research_output_df["subtype"].map(scholarly_cfg["subtype_to_type"]))
 
 for type_name in scholarly_cfg["types"]:
@@ -304,6 +328,7 @@ custom_cfg = FAR_TEMPLATES_CONFIG["Custom Sections"]
 type_slug_map = custom_cfg["type_slug"]
 
 custom_sections_df = read_enriched_table(f"enriched_custom_sections_{CURRENT_DAY}")
+log_unmapped_subtypes(custom_sections_df, "subtype", custom_cfg["types"], "custom_sections")
 
 for type_name in custom_cfg["types"]:
     # No authors_df: Part 2 already explodes participants in place, so
