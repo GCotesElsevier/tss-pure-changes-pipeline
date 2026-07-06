@@ -103,4 +103,8 @@ RESEARCH_OUTPUT_TRANSFORM_CONFIG = {   'pureId': {'actions': [{'type': 'cast', '
     'workflow.description.en_GB': {   'actions': [   {'type': 'add'},
                                                      {'type': 'rename', 'to': 'workflow'}]},
     'patentNumber': {'actions': [{'type': 'add'}, {'type': 'rename', 'to': 'patent_number'}]},
-    'country.term.en_GB': {'actions': [{'type': 'add'}, {'type': 'rename', 'to': 'country'}]}}
+    'country.term.en_GB': {'actions': [{'type': 'add'}, {'type': 'rename', 'to': 'country'}]},
+    'volume': {'actions': [{'type': 'add'}]},
+    'edition': {'actions': [{'type': 'add'}]},
+    'numberOfPages': {'actions': [{'type': 'add'}]},
+    'journalNumber': {'actions': [{'type': 'add'}]}}

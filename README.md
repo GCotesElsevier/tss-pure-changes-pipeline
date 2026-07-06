@@ -12,14 +12,18 @@ The pipeline has three parts, each a module in this repo:
    (`/changes/{tokenOrDate}`) and returns `(uuid, changeType, familySystemName,
    version)` for every record that was created, updated, or deleted since the
    last run, filtered to the Pure families relevant to each scope.
-2. **`part2_enrichment/`** *(not started yet)* — For every `uuid` from Part 1
-   that is not a `DELETE`, fetches the full record from Pure's current API,
-   joins it with supporting entities (persons, organizations, publishers,
-   events), and resolves the record's FAR `primary_id` via an email lookup
-   against FAR's user directory.
-3. **`part3_load/`** *(not started yet)* — Transforms enriched records into
-   FAR's upload templates and loads them to Databricks tables and SFTP,
-   split into `new` / `updates` / `deletes` subfolders.
+2. **`part2_enrichment/`** — For every `uuid` from Part 1 that is not a
+   `DELETE`, fetches the full record from Pure's current API, joins it with
+   supporting entities (persons, organizations, publishers, events), and
+   resolves each internal author's FAR `faculty_id` via an email lookup
+   against FAR's user directory. Validated end-to-end against real HBKU
+   data for all 3 scopes.
+3. **`part3_load/`** — Builds Faculty180 (FAR) upload templates from Part
+   2's enriched records (`far_templates.py`, ported from `tss-dedup`'s
+   `postprocessing/transformers.py`). Validated locally against synthetic
+   data; not yet run against real Databricks data. SFTP upload (split into
+   `new` / `updates` / `deletes` subfolders, replacing `tss-dedup`'s single
+   folder + `old_files` archive) is still to be designed and built.
 
 ## Scopes
 
@@ -64,5 +68,7 @@ values for each scope are homologated in
 
 ## Status
 
-Only Part 1 (`part1_changes/hbku/`) has been scaffolded so far. See its
-README for open design points before it is production-ready.
+Parts 1 and 2 are validated end-to-end against real HBKU data. Part 3 is
+built and validated locally against synthetic data, but not yet run in
+Databricks, and does not upload to SFTP yet. See each part's own README for
+open design points.

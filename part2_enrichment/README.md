@@ -54,7 +54,14 @@ organizations, publishers, events), and resolves the record's FAR
   selection happens in Part 3). A `.py` file, not `.json` — see the root
   README's "Conventions" section for why. **Validated end-to-end against
   real HBKU data** (Article, Review article, Conference contribution
-  subtypes all extracted correctly).
+  subtypes all extracted correctly). Also extracts `volume`, `edition`,
+  `numberOfPages`, `journalNumber` (added while building Part 3 — these
+  are simple top-level fields on the same record, needed by
+  `far_templates.py`'s Book/Chapter/Journal/Proceeding templates).
+  `journal_impact_factor` is NOT in this config — it needs a separate API
+  call per record (see `enrich_changes.py`'s
+  `fetch_journal_impact_factor`), so it's computed in the orchestration
+  notebook instead of the declarative config.
 - `hbku/test_research_output_transform.py` — one-off diagnostic: runs the
   config above against real records fetched via `PureAPI`, using uuids
   already sitting in Part 1's changes table.
@@ -145,11 +152,32 @@ organizations, publishers, events), and resolves the record's FAR
   transform configs + `participant_explode.py` end-to-end against
   synthetic records for all 3 scopes before touching Databricks.
 
+  **Confirmed end-to-end against real HBKU data (2026-07-06):** all 3
+  scopes ran successfully — Research Output (5,383 records + 160,992
+  authors), Custom Sections (1 record), Grants (1 record + 5 authors,
+  the first real confirmation that Grants' `participants`/`awardHolders`
+  shares contributors/persons' item shape). Two real bugs found and fixed
+  along the way: a `CANNOT_MERGE_TYPE` schema-inference crash on
+  `keywordGroups` (fixed by adopting `spark_utils.safe_save_table`, ported
+  from `tss-dedup`), and a `DELTA_EMPTY_DATA` crash writing an empty,
+  column-less deletes table (fixed by having `save_table` skip empty
+  DataFrames entirely instead of trying to write them — this repo's
+  date-suffixed tables don't need `safe_save_table`'s "preserve schema for
+  an empty write" behavior, unlike `tss-dedup`'s fixed-name tables).
+
+  `fetch_journal_impact_factor(pure_api, journal_id, year)`: added while
+  building Part 3, since `far_templates.py`'s Journal/Editorial templates
+  need it. One extra API call per record that has a `journal_id`
+  (`journals/{journal_id}/metrics/webOfScienceJournal`, filtered by
+  publication year) — ported from `ip-pure2far-integration`'s
+  `get_journal_impact_factor`. Missing WoS metrics (common) just means no
+  impact factor for that record, not a batch failure.
+
 ## Still to build
 
-- Run `enrich_changes.py` in Databricks against real Part 1 output and
-  confirm the joins/explode work against real data (so far only validated
-  with synthetic records locally, plus each scope's transform config
-  separately against real HBKU data).
-- Part 3 (`part3_load/`) — adapts `tss-dedup`'s `Step3_Postprocessor` to
-  consume these `enriched_*` tables instead of `processed_*`.
+- Retrofit Part 1's `fetch_changes.py` to use `spark_utils.safe_save_table`
+  too, for consistency (currently uses its own simpler `.astype(str)`,
+  which works today but isn't this) — non-urgent follow-up.
+- Part 3 (`part3_load/`) is now built (see its own README) but not yet
+  validated against real Databricks data, and does not upload to SFTP yet
+  (folder structure still to be designed together).

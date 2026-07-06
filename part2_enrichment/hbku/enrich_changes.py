@@ -254,6 +254,32 @@ def save_table(df: pd.DataFrame, table_name: str) -> None:
 
 # COMMAND ----------
 
+def fetch_journal_impact_factor(pure_api, journal_id, year):
+    """
+    Ported from ip-pure2far-integration's Transformer.process_journal_impact_factor:
+    looks up the journal's Web of Science impact factor for the record's
+    publication year. Journals without WoS metrics are common (the endpoint
+    404s), so a lookup failure just means no impact factor for that record,
+    not a batch failure.
+    """
+    try:
+        items = pure_api.read_related(f"journals/{journal_id}/metrics/webOfScienceJournal")
+    except Exception:
+        return None
+
+    try:
+        target_year = int(year)
+    except (TypeError, ValueError):
+        return None
+
+    for item in items:
+        if item.get("year") == target_year:
+            for metric in item.get("metricValues", []):
+                if metric.get("metricId") == "impactFactor":
+                    return metric.get("decimalValue")
+    return None
+
+
 def process_research_output(uuids: list):
     if not uuids:
         return pd.DataFrame(), pd.DataFrame()
@@ -266,6 +292,18 @@ def process_research_output(uuids: list):
 
     result = result.merge(publisher_lookup, how="left", on="publisher_uuid")
     result = result.merge(event_lookup, how="left", on="event_uuid")
+
+    needs_impact_factor = result[result["journal_id"].notna()][["uuid", "journal_id", "statusYear"]]
+    if not needs_impact_factor.empty:
+        impact_factors = fetch_records_parallel(
+            lambda row: fetch_journal_impact_factor(pure_api, row["journal_id"], row["statusYear"]),
+            needs_impact_factor.to_dict("records"),
+            label="journal-impact-factor",
+        )
+        needs_impact_factor = needs_impact_factor.assign(journal_impact_factor=impact_factors)
+        result = result.merge(needs_impact_factor[["uuid", "journal_impact_factor"]], how="left", on="uuid")
+    else:
+        result["journal_impact_factor"] = None
 
     authors = explode_participants(result, id_column="uuid", list_column="contributors", language=LANGUAGE)
     authors = attach_faculty_id(authors, persons_df, email_to_faculty_id)
