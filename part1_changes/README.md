@@ -29,6 +29,12 @@
   for recent activity, without paging the full changes stream. Used to tell
   whether the absence of `Award` events in `discover_families.py` is due to
   low volume rather than a wrong family name.
+- `hbku/reset_sync_state.py` — dev utility: drops the resumptionToken
+  control table so the next `fetch_changes.py` run starts over from
+  `DEFAULT_SINCE_DATE`. Needed after a run's output got corrupted/lost even
+  though the events were already consumed from the stream (see the Arrow
+  bug below) — resuming normally would skip those events forever, since
+  the changes stream can't replay a range twice. Not for routine use.
 
 ## Open design points
 
@@ -66,3 +72,19 @@ Activities ran through 2026-06-30; Grants and Custom Sections last ran
 2026-06-22 but had no new changes as of 2026-06-30, so they were already
 current too). This value is only used before `SYNC_STATE_TABLE` exists —
 every run after the first ignores it and resumes from the persisted token.
+
+## Known issue fixed: Arrow silently corrupting small saved tables
+
+A run on 2026-07-06 saved `changes_grants_<date>` and
+`changes_custom_sections_<date>` with exactly 1 row each, but every column
+was null — even though the underlying pandas data (`changes_df`,
+`raw_events`) was confirmed correct by printing it directly in the
+notebook. The Arrow-optimized `createDataFrame` path threw `Cannot grow
+BufferHolder by size -32` converting one of these small DataFrames and
+silently fell back instead of raising, producing the null row. Fixed by
+`spark.conf.set("spark.sql.execution.arrow.pyspark.enabled", "false")` in
+`fetch_changes.py` (`tss-dedup` already does this proactively in its own
+notebooks). If a run's output was affected before this fix landed, use
+`hbku/reset_sync_state.py` to reprocess from `DEFAULT_SINCE_DATE` again —
+the affected events were already consumed from the stream, so resuming
+normally would skip them forever.
