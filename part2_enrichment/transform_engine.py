@@ -3,8 +3,17 @@
 # MAGIC ### Transform engine
 # MAGIC Generic, config-driven engine for turning a raw Pure JSON record into
 # MAGIC our normalized schema. Used for all 3 scopes (Scholarly Activities,
-# MAGIC Grants, Custom Sections) — every subtype gets its own JSON config in
-# MAGIC `cfgs/`, instead of a dedicated Python class per subtype.
+# MAGIC Grants, Custom Sections) — one JSON config per scope in `cfgs/`
+# MAGIC (research outputs, activities, and grants each have a single shared
+# MAGIC raw JSON shape across all their subtypes in Pure; subtype-specific
+# MAGIC column selection happens later, in Part 3).
+# MAGIC
+# MAGIC Author/coauthor/participant lists (`contributors`, `persons`,
+# MAGIC `participants`) are intentionally NOT handled by this config: that was
+# MAGIC true of the original Grants-only version of this engine too (author
+# MAGIC processing was always separate, bespoke code), so it stays a dedicated
+# MAGIC step in Part 2's orchestration notebook instead of being forced into
+# MAGIC config actions it doesn't fit well.
 # MAGIC
 # MAGIC Adapted from the declarative engine originally written for Grants
 # MAGIC only (`ip-pure2far-integration`, `grants_integration_upd` branch,
@@ -20,7 +29,15 @@
 # MAGIC - `cast` — `to_type` one of `datetime`, `date`, `string`, `int`, `float`
 # MAGIC - `fill_null` — replaces null (and empty string) with a constant
 # MAGIC - `extract_from_list` — pulls a value out of a list of dicts, optionally
-# MAGIC   matching on a nested key first (`match.path` / `match.equals`)
+# MAGIC   matching on a nested key first (`match.path` / `match.equals`);
+# MAGIC   `match.fallback: "first_item"` uses the list's first item if nothing
+# MAGIC   matches, instead of `default`
+# MAGIC - `join_from_list` — pulls a value from EVERY item in a list and joins
+# MAGIC   them with `separator` (default `"; "`); `value_path` for a single
+# MAGIC   nested key per item (`[]` means the item itself, for plain string
+# MAGIC   lists), or `value_paths` (a list of paths) to join multiple fields
+# MAGIC   per item first with `item_separator` (e.g. first/last name);
+# MAGIC   `dedupe: true` drops repeated values before joining
 # MAGIC - `lookup_from_dataframe` — enriches by joining against another
 # MAGIC   DataFrame passed in `context`
 # MAGIC - `map_values` — dictionary-based value mapping, with an optional
@@ -59,13 +76,25 @@ def _flatten_value(value, parent_key="", sep="."):
     return {parent_key: value}
 
 
-def flatten_dataframe(df: pd.DataFrame, sep: str = ".") -> pd.DataFrame:
+def flatten_dataframe(records: list, sep: str = ".") -> pd.DataFrame:
     """
-    Flattens every dict-valued column in a DataFrame (row cardinality is
-    preserved — this does not explode lists, only flattens nested dicts).
+    Flattens a list of raw dicts (one per Pure record) into a DataFrame,
+    one column per leaf path.
+
+    Takes the raw list directly rather than an already-built DataFrame:
+    building a DataFrame first (`pd.DataFrame(records)`) lets pandas
+    NaN-fill any key a given row doesn't have, which then makes "this row
+    never had this key" indistinguishable from "this row's value for this
+    key is null" once `_flatten_value` sees it — a bare scalar NaN doesn't
+    get flattened the way an actual nested dict does, so the same field
+    ends up as two different columns (e.g. both `abstract` and
+    `abstract.en_GB`) whenever a batch mixes records with different
+    optional nested structures (e.g. Patents alongside Chapters). Flattening
+    each record's own dict before it ever goes through a DataFrame avoids
+    that entirely.
     """
     flattened_rows = []
-    for row in df.to_dict(orient="records"):
+    for row in records:
         flat_row = {}
         for col, value in row.items():
             flat_row.update(_flatten_value(value, col, sep))
@@ -160,6 +189,16 @@ def apply_transforms(df: pd.DataFrame, config: dict, context: dict = None) -> pd
                                     value_obj = value_obj[0]
                                 value = get_by_path(value_obj, value_path)
                                 return value if value is not None else default
+                        # No item matched: fall back to the first list item
+                        # if asked to (e.g. Pure's publicationStatuses marks
+                        # one entry `current: true`, but falls back to the
+                        # first entry when none is flagged that way).
+                        if match.get("fallback") == "first_item":
+                            item = cell[0]
+                            if not isinstance(item, dict):
+                                return default
+                            value = get_by_path(item, value_path)
+                            return value if value is not None else default
                         return default
 
                     item = cell[0]
@@ -169,6 +208,37 @@ def apply_transforms(df: pd.DataFrame, config: dict, context: dict = None) -> pd
                     return value if value is not None else default
 
                 df[target] = df[field].apply(extract)
+
+            elif action_type == "join_from_list":
+                # Unlike extract_from_list (one value from one item),
+                # this pulls a value from EVERY item in the list and joins
+                # them — e.g. every organization uuid, every DOI, every
+                # host publication editor's "First Last".
+                value_path = action.get("value_path")
+                value_paths = action.get("value_paths")
+                item_separator = action.get("item_separator", " ")
+                separator = action.get("separator", "; ")
+                dedupe = action.get("dedupe", False)
+                target = action.get("to", field)
+
+                def join_item(item, value_path=value_path, value_paths=value_paths, item_separator=item_separator):
+                    if value_paths:
+                        parts = [get_by_path(item, p) for p in value_paths]
+                        parts = [str(p) for p in parts if p is not None and str(p).strip()]
+                        return item_separator.join(parts) if parts else None
+                    value = get_by_path(item, value_path if value_path is not None else [])
+                    return str(value) if value is not None and str(value).strip() else None
+
+                def join_list(cell, join_item=join_item, dedupe=dedupe, separator=separator):
+                    if not isinstance(cell, list) or not cell:
+                        return None
+                    values = [join_item(item) for item in cell]
+                    values = [v for v in values if v]
+                    if dedupe:
+                        values = list(dict.fromkeys(values))
+                    return separator.join(values) if values else None
+
+                df[target] = df[field].apply(join_list)
 
             elif action_type == "lookup_from_dataframe":
                 reference = action["reference"]
