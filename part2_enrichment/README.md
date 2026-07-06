@@ -68,15 +68,39 @@ organizations, publishers, events), and resolves the record's FAR
 - `hbku/test_activity_transform.py` — same diagnostic pattern, against
   Part 1's Custom Sections changes table (only ~2 real events seen so far,
   per Part 1's low-volume finding).
+- `grants_merge.py` — `fetch_and_merge_grant(...)`: Pure models a grant as
+  two linked content types (`Project` + `Award`, joined via an
+  `award-clusters` bridge), and `HBKU_cfg_transform_grants.py` expects them
+  already merged (fields present on both sides suffixed `_project` /
+  `_award`, mirroring the `pandas.merge(..., suffixes=...)` shape
+  `ip-pure2far-integration` used). Implements the `Project -> Award`
+  direction (`projects/{uuid}/award-clusters`). **Known gap:** no
+  `Award -> Project` reverse lookup exists yet — a changed `Award` uuid
+  (rare; 0 seen in Part 1's 30-day check) is processed alone for now.
+- `cfgs/HBKU_cfg_transform_grants.py` — transform config
+  (`GRANTS_TRANSFORM_CONFIG`), close to a direct translation of
+  `GRANTS_CONFIG` (already declarative in the original). Validated locally
+  against a synthetic merged Project+Award record (uuid/pureId fallback,
+  `awardStatus` / `internal_external` mapping, `fundings` extraction, the
+  `lookup_from_dataframe` sponsor lookup, and `map_values` with `__SELF__`
+  all confirmed working) — some fields came back null in that test only
+  because the synthetic data didn't mirror which fields real Pure Awards
+  and Projects share (unconfirmed without real Award data), not because of
+  a code bug.
+  **Inherited limitation:** `fundingType`'s mapping is an exact,
+  case-sensitive string match against a hardcoded sponsor-name list from
+  `ip-pure2far-integration` — any mismatch in casing/punctuation silently
+  falls through to `"__SELF__"` (the sponsor's own name used as the
+  funding type). Ported as-is, not something introduced here.
+- `hbku/test_grants_transform.py` — same diagnostic pattern, using Part 1's
+  real Grants change (currently 1, a `Project`) — also the first real look
+  at whether that Project has a linked Award at all.
 
 ## Still to build
 
-- `cfgs/` config for Grants, replacing `GRANTS_CONFIG` from
-  `ip-pure2far-integration` with the unified engine's format (this one
-  should be the easiest: `GRANTS_CONFIG` was already declarative, just
-  needs adapting to this engine's exact action names).
 - `hbku/enrich_changes.py` — the main orchestration notebook: reads Part 1's
-  latest changes tables, fetches full records, applies the transform config,
-  joins entities (from `sync_*` tables above) + FAR `primary_id`, explodes
-  authors (Scholarly Activities and Grants only — Custom Sections has no
-  author table), and outputs the enriched batch for Part 3.
+  latest changes tables, fetches full records (via `grants_merge.py` for
+  Grants), applies the transform config, joins entities (from `sync_*`
+  tables above) + FAR `primary_id`, explodes authors (Scholarly Activities
+  and Grants only — Custom Sections has no author table), and outputs the
+  enriched batch for Part 3.

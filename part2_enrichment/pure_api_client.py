@@ -57,6 +57,21 @@ class PureAPI:
                 break
         return data
 
+    def read_related(self, end_point: str) -> list:
+        """
+        GET a related-data endpoint that isn't a uuid lookup and isn't
+        necessarily paginated the same way as `read_all` (e.g.
+        `projects/{uuid}/award-clusters`). Handles the response being
+        either `{"items": [...]}` or a plain list directly, since it's
+        unconfirmed which shape this specific kind of endpoint returns.
+        """
+        result = self._get(end_point)
+        if isinstance(result, dict):
+            return result.get("items", [])
+        if isinstance(result, list):
+            return result
+        return []
+
 
 # COMMAND ----------
 
