@@ -63,8 +63,8 @@ organizations, publishers, events), and resolves the record's FAR
   Ported from `Transformer.process_activities`. `persons` (the participant
   list) and organization-name resolution are left for the orchestration
   notebook, same reasoning as `contributors` in the research output config.
-  Validated locally against synthetic records (external- and
-  internal-organization `memberOf` cases).
+  Validated locally against synthetic records and against the one real
+  Custom Sections record available (Custom Sections is very low-volume).
 - `hbku/test_activity_transform.py` — same diagnostic pattern, against
   Part 1's Custom Sections changes table (only ~2 real events seen so far,
   per Part 1's low-volume finding).
