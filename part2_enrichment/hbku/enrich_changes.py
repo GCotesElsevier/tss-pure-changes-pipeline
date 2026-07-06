@@ -93,8 +93,17 @@
 
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
+
+# Pure's REST API has no batch/multi-uuid fetch endpoint, so full records
+# are always fetched one uuid at a time (see fetch_records_parallel below).
+# Scholarly Activities alone can be thousands of records a day, and doing
+# that sequentially over HTTP is the actual bottleneck in this notebook —
+# not a bug, just a lot of round trips. This bounds how many of those
+# requests run concurrently.
+FETCH_MAX_WORKERS = 8
 
 # Same Arrow bug Part 1 hit (see part1_changes/hbku/fetch_changes.py): a
 # pandas -> Spark conversion can silently corrupt small/oddly-typed batches
@@ -174,10 +183,42 @@ def read_changes_table(scope_slug: str) -> pd.DataFrame:
     """
     table_name = f"{DATABASE}.changes_{scope_slug}_{CURRENT_DAY}"
     try:
-        return spark.table(table_name).toPandas()
+        df = spark.table(table_name).toPandas()
+        logger.info("[%s] read %d rows from %s", scope_slug, len(df), table_name)
+        return df
     except Exception:
         logger.info("No changes table for %s today (%s) — treating as zero events.", scope_slug, table_name)
         return pd.DataFrame(columns=["uuid", "changeType", "familySystemName", "version"])
+
+
+def fetch_records_parallel(fetch_fn, items: list, label: str, max_workers: int = FETCH_MAX_WORKERS,
+                            log_every: int = 200) -> list:
+    """
+    Runs fetch_fn(item) for every item in `items` concurrently — these are
+    independent HTTP GETs to Pure (see pure_api_client.py's PureAPI._get,
+    stateless per call), safe to parallelize. Preserves input order. Logs
+    progress every `log_every` completions so a long batch (e.g. Scholarly
+    Activities, thousands of records) visibly keeps moving instead of
+    looking stuck.
+    """
+    total = len(items)
+    if total == 0:
+        return []
+
+    logger.info("[%s] fetching %d records (%d concurrent workers)...", label, total, max_workers)
+    results = [None] * total
+    completed = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_index = {executor.submit(fetch_fn, item): i for i, item in enumerate(items)}
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            results[index] = future.result()
+            completed += 1
+            if completed % log_every == 0 or completed == total:
+                logger.info("[%s] fetched %d/%d records", label, completed, total)
+
+    return results
 
 
 def split_deletes(changes_df: pd.DataFrame):
@@ -216,7 +257,9 @@ def process_research_output(uuids: list):
     if not uuids:
         return pd.DataFrame(), pd.DataFrame()
 
-    raw_records = [pure_api.read_record("research-outputs", uuid) for uuid in uuids]
+    raw_records = fetch_records_parallel(
+        lambda uuid: pure_api.read_record("research-outputs", uuid), uuids, label="research-outputs"
+    )
     flat = flatten_dataframe(raw_records)
     result = apply_transforms(flat, RESEARCH_OUTPUT_TRANSFORM_CONFIG)
 
@@ -235,7 +278,9 @@ def process_custom_sections(uuids: list) -> pd.DataFrame:
     if not uuids:
         return pd.DataFrame()
 
-    raw_records = [pure_api.read_record("activities", uuid) for uuid in uuids]
+    raw_records = fetch_records_parallel(
+        lambda uuid: pure_api.read_record("activities", uuid), uuids, label="activities"
+    )
     flat = flatten_dataframe(raw_records)
     result = apply_transforms(flat, ACTIVITY_TRANSFORM_CONFIG)
 
@@ -257,10 +302,11 @@ def process_grants(changes_rows: pd.DataFrame):
     if changes_rows.empty:
         return pd.DataFrame(), pd.DataFrame()
 
-    merged_records = [
-        fetch_and_merge_grant(pure_api, row["uuid"], row["familySystemName"])
-        for _, row in changes_rows.iterrows()
-    ]
+    merged_records = fetch_records_parallel(
+        lambda row: fetch_and_merge_grant(pure_api, row["uuid"], row["familySystemName"]),
+        changes_rows.to_dict("records"),
+        label="grants",
+    )
     flat = flatten_dataframe(merged_records)
     result = apply_transforms(flat, GRANTS_TRANSFORM_CONFIG, context={"external_organizations": external_orgs_df})
 
@@ -274,6 +320,9 @@ def process_grants(changes_rows: pd.DataFrame):
 
 scholarly_changes = read_changes_table("scholarly_activities")
 scholarly_non_deletes, scholarly_deletes = split_deletes(scholarly_changes)
+logger.info(
+    "[scholarly_activities] %d to enrich, %d deletes", len(scholarly_non_deletes), len(scholarly_deletes)
+)
 
 research_output_df, research_output_authors_df = process_research_output(scholarly_non_deletes["uuid"].tolist())
 research_output_deletes_df = build_deletes_table(scholarly_deletes, "scholarly_activities")
@@ -286,6 +335,9 @@ save_table(research_output_deletes_df, f"enriched_research_output_deletes_{CURRE
 
 custom_sections_changes = read_changes_table("custom_sections")
 custom_sections_non_deletes, custom_sections_deletes = split_deletes(custom_sections_changes)
+logger.info(
+    "[custom_sections] %d to enrich, %d deletes", len(custom_sections_non_deletes), len(custom_sections_deletes)
+)
 
 custom_sections_df = process_custom_sections(custom_sections_non_deletes["uuid"].tolist())
 custom_sections_deletes_df = build_deletes_table(custom_sections_deletes, "custom_sections")
@@ -297,6 +349,7 @@ save_table(custom_sections_deletes_df, f"enriched_custom_sections_deletes_{CURRE
 
 grants_changes = read_changes_table("grants")
 grants_non_deletes, grants_deletes = split_deletes(grants_changes)
+logger.info("[grants] %d to enrich, %d deletes", len(grants_non_deletes), len(grants_deletes))
 
 grants_df, grants_participants_df = process_grants(grants_non_deletes)
 grants_deletes_df = build_deletes_table(grants_deletes, "grants")
