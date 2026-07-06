@@ -66,8 +66,16 @@ def count_recent_records(base_url: str, api_key: str, end_point: str, query_fiel
     url = f"{base_url}/{end_point}"
     headers = {"accept": "application/json", "Content-Type": "application/xml", "api-key": api_key}
     payload = build_incremental_payload(query_field, since_date)
+
+    logger.info("POST %s\n%s", url, payload)
     response = requests.post(url, headers=headers, data=payload, verify=False)
-    response.raise_for_status()
+
+    if response.status_code != 200:
+        # Surface Pure's actual error body instead of a bare "400 Bad
+        # Request" — that message usually names the exact invalid element.
+        logger.error("Request failed (%d): %s", response.status_code, response.text)
+        response.raise_for_status()
+
     return response.json().get("count", 0)
 
 # COMMAND ----------
