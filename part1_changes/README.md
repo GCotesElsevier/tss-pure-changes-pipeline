@@ -21,6 +21,11 @@
 - `hbku/discover_families.py` — one-off diagnostic notebook: pulls the
   **unfiltered** changes stream and reports the distinct `familySystemName`
   values seen, to confirm open design point 1 below against real data.
+- `hbku/check_recent_awards.py` — one-off diagnostic notebook: checks Pure's
+  regular `awards` endpoint (server-side `modifiedAfter` filter, uuid-only)
+  for recent activity, without paging the full changes stream. Used to tell
+  whether the absence of `Award` events in `discover_families.py` is due to
+  low volume rather than a wrong family name.
 
 ## Open design points
 
@@ -32,9 +37,12 @@
    only 1 `Project` event in 5 days, that is plausibly just low volume rather
    than a wrong family name (it is a real Pure content type, mirrored by the
    separate `awards` endpoint in `ip-pure2far-integration`), but it remains
-   unconfirmed. Re-run `discover_families.py` with an earlier `SINCE_DATE`
-   (up to Pure's 30-day window) if firmer confirmation is needed before
-   relying on it in Part 2.
+   unconfirmed. Since Pure's `/changes` endpoint has no server-side family
+   filter, re-running `discover_families.py` over a longer window is just as
+   expensive as before rather than cheaper. Use `hbku/check_recent_awards.py`
+   instead — a single, server-side-filtered call to the regular `awards`
+   endpoint — to check whether any award changed recently at all before
+   relying on `Award` in Part 2.
    Also observed: `InternalOrganization`/`Organisation` never appeared in
    this window either (only `ExternalOrganisation` did) — irrelevant to
    Part 1's 3 scopes, but worth remembering for Part 2, since internal org
