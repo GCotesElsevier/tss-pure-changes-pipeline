@@ -2,12 +2,12 @@
 # MAGIC %md
 # MAGIC ### Research output transform config
 # MAGIC Covers all 7 Scholarly Activities subtypes (Book, Chapter, Journal,
-# MAGIC Proceeding, Patent, Other, Editorial) — they share one raw JSON shape
+# MAGIC Proceeding, Patent, Other, Editorial) ï¿½ they share one raw JSON shape
 # MAGIC in Pure, only `subtype` differs; subtype-specific column selection
 # MAGIC happens in Part 3. See transform_engine.py's module docstring for the
 # MAGIC action vocabulary used here.
 # MAGIC
-# MAGIC A plain data file, no logic — same content as the JSON config it
+# MAGIC A plain data file, no logic ï¿½ same content as the JSON config it
 # MAGIC replaced, just loaded via `%run` instead of `open()` (this
 # MAGIC workspace only reliably resolves Databricks-recognized notebook files,
 # MAGIC not plain `.json`; see the root README).
@@ -82,11 +82,13 @@ RESEARCH_OUTPUT_TRANSFORM_CONFIG = {   'pureId': {'actions': [{'type': 'cast', '
     'electronicISBNs': {   'actions': [   {'type': 'add'},
                                           {   'type': 'join_from_list',
                                               'value_path': [],
-                                              'to': 'isbn_electronic'}]},
+                                              'to': 'isbn_electronic'},
+                                          {'type': 'drop'}]},
     'printISBNs': {   'actions': [   {'type': 'add'},
                                      {   'type': 'join_from_list',
                                          'value_path': [],
-                                         'to': 'isbn_print'}]},
+                                         'to': 'isbn_print'},
+                                     {'type': 'drop'}]},
     'hostPublicationEditors': {   'actions': [   {'type': 'add'},
                                                  {   'type': 'join_from_list',
                                                      'value_paths': [['firstName'], ['lastName']],
