@@ -66,7 +66,20 @@ logger.info("Scopes: %s", list(cfg.keys()))
 
 # COMMAND ----------
 
-for scope_name, scope_cfg in cfg.items():
+# Defaults to running all 3 scopes together (the regular pipeline mode), but
+# can be narrowed to a single scope — useful when one scope's cutoff is
+# closer to Pure's 30-day /changes limit than the others' and needs to run
+# NOW without also advancing (and later having to reset) another scope's
+# resumption token before it's ready (e.g. Scholarly Activities, still
+# waiting on a fresh processed_* snapshot as of 2026-07-23 — see project
+# memory).
+dbutils.widgets.text("SCOPE", "ALL", "Scope to run (or ALL)")
+scope_widget = dbutils.widgets.get("SCOPE")
+scopes_to_run = cfg if scope_widget == "ALL" else {scope_widget: cfg[scope_widget]}
+
+# COMMAND ----------
+
+for scope_name, scope_cfg in scopes_to_run.items():
     families = scope_cfg["pure_families"]
     sync_state_table = SYNC_STATE_TABLES[scope_name]
     default_since_date = DEFAULT_SINCE_DATES[scope_name]
