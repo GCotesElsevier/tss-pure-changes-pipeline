@@ -64,6 +64,17 @@
 # MAGIC   sequentially per grant (order within the source table) since there
 # MAGIC   is no better signal available; harmless in practice (only affects
 # MAGIC   the co-author display order on the FAR CSV, not who's included).
+# MAGIC
+# MAGIC **`journal_impact_factor` backfill for Research Output's base snapshot**
+# MAGIC (added 2026-07-23): `processed_researchoutputs_20260723` never
+# MAGIC computed this field — it requires a live per-record Pure API call
+# MAGIC (`journals/{id}/metrics/webOfScienceJournal`) that
+# MAGIC `ip-pure2far-integration`'s pipeline never made. Confirmed with the
+# MAGIC user to backfill it anyway despite the cost (~5800 extra API calls) —
+# MAGIC `backfill_journal_impact_factor` below fetches it in parallel
+# MAGIC (same `fetch_records_parallel` pattern as `enrich_changes.py`) for
+# MAGIC every base-snapshot row that has a `journal_id`. Expect this cell to
+# MAGIC take several minutes.
 
 # COMMAND ----------
 
@@ -72,6 +83,10 @@
 # COMMAND ----------
 
 # MAGIC %run ../spark_utils
+
+# COMMAND ----------
+
+# MAGIC %run ../pure_api_client
 
 # COMMAND ----------
 
@@ -85,6 +100,7 @@
 
 import logging
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 
@@ -131,8 +147,87 @@ email_to_faculty_id = get_email_to_faculty_id(spark, logger)
 logger.info("Loaded %d FAR users for email -> faculty_id lookup", len(email_to_faculty_id))
 
 persons_df = spark.table(f"{DATABASE}.{PERSON_TABLE}").toPandas()
+pure_api = PureAPI(base_url=API_URL, api_key=API_KEY)
 
 # COMMAND ----------
+
+def fetch_journal_impact_factor(pure_api, journal_id, year):
+    """
+    Same as enrich_changes.py's version: looks up the journal's Web of
+    Science impact factor for the record's publication year. A lookup
+    failure (common -- many journals have no WoS metrics) just means no
+    impact factor for that record, not a batch failure.
+    """
+    try:
+        items = pure_api.read_related(f"journals/{journal_id}/metrics/webOfScienceJournal")
+    except Exception:
+        return None
+
+    try:
+        target_year = int(year)
+    except (TypeError, ValueError):
+        return None
+
+    for item in items:
+        if item.get("year") == target_year:
+            for metric in item.get("metricValues", []):
+                if metric.get("metricId") == "impactFactor":
+                    return metric.get("decimalValue")
+    return None
+
+
+def fetch_records_parallel(fetch_fn, items: list, label: str, max_workers: int = 8, log_every: int = 200) -> list:
+    """Same pattern as enrich_changes.py -- parallelizes independent Pure API GETs, preserves order, logs progress."""
+    total = len(items)
+    if total == 0:
+        return []
+
+    logger.info("[%s] fetching %d records (%d concurrent workers)...", label, total, max_workers)
+    results = [None] * total
+    completed = 0
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_index = {executor.submit(fetch_fn, item): i for i, item in enumerate(items)}
+        for future in as_completed(future_to_index):
+            index = future_to_index[future]
+            results[index] = future.result()
+            completed += 1
+            if completed % log_every == 0 or completed == total:
+                logger.info("[%s] fetched %d/%d records", label, completed, total)
+
+    return results
+
+
+def backfill_journal_impact_factor(df: pd.DataFrame, scope_label: str) -> pd.DataFrame:
+    """
+    Research Output's base snapshot never computed journal_impact_factor
+    (see module docstring) -- backfill it for every row with a journal_id,
+    even though this means one extra Pure API call per row. No-op for
+    scopes without a journal_id column (Grants).
+    """
+    if "journal_id" not in df.columns:
+        return df
+
+    df = df.copy()
+    if "journal_impact_factor" not in df.columns:
+        df["journal_impact_factor"] = None
+
+    needs_lookup = df[df["journal_id"].notna() & df["journal_impact_factor"].isna()]
+    if needs_lookup.empty:
+        return df
+
+    impact_factors = fetch_records_parallel(
+        lambda row: fetch_journal_impact_factor(pure_api, row["journal_id"], row.get("statusYear")),
+        needs_lookup.to_dict("records"),
+        label=f"{scope_label}-journal-impact-factor-backfill",
+    )
+    df.loc[needs_lookup.index, "journal_impact_factor"] = impact_factors
+    logger.info(
+        "[%s] backfilled journal_impact_factor for %d/%d base-snapshot rows with a journal_id",
+        scope_label, sum(v is not None for v in impact_factors), len(needs_lookup),
+    )
+    return df
+
 
 def read_table_or_empty(table_name: str) -> pd.DataFrame:
     full_table_name = f"{DATABASE}.{table_name}"
@@ -245,6 +340,8 @@ def merge_scope(scope_label: str, cfg: dict) -> None:
     if overlap:
         logger.info("[%s] %d uuid(s) present in both base snapshot and today's real changes — keeping the real ones.", scope_label, len(overlap))
     base_main_df = base_main_df[~base_main_df["uuid"].isin(existing_uuids)]
+
+    base_main_df = backfill_journal_impact_factor(base_main_df, scope_label)
 
     merged_main_df = pd.concat([existing_main_df, base_main_df], ignore_index=True)
 

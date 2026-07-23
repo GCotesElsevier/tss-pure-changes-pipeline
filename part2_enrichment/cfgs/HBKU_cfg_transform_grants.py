@@ -194,6 +194,13 @@ GRANTS_TRANSFORM_CONFIG = {
         ]
     },
 
+    # Kept as its own column too, not just as a fallback source for
+    # awardStatusDate above -- far_templates.py's Pure_Grants_Transformer
+    # reads "awardDate" directly for the "Award Date" FAR field, which was
+    # always empty until this was added (found 2026-07-23 while
+    # reconciling Ajman's initial load against real column names).
+    "awardDate": {"actions": [{"type": "add"}]},
+
     "title_project.en_GB": {
         "actions": [
             {"type": "add"},
