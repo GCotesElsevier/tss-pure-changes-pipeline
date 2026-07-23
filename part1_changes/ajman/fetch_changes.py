@@ -1,22 +1,25 @@
 # Databricks notebook source
 # MAGIC %md
 # MAGIC # Part 1 — Fetch Pure Changes (Ajman)
+# MAGIC **Grants + Scholarly Activities only** — Custom Sections is
+# MAGIC explicitly out of scope for Ajman (confirmed with the user
+# MAGIC 2026-07-23; stays HBKU-only).
+# MAGIC
 # MAGIC Unlike HBKU (a single combined pass over the changes stream, split by
 # MAGIC scope afterwards, using one shared resumptionToken), Ajman needs each
 # MAGIC scope to resume from its OWN starting point — Scholarly Activities and
 # MAGIC Grants each have a different pre-existing snapshot cutoff (see
-# MAGIC `ajman/config.py` and the initial load in `part3_load/ajman/`), and
-# MAGIC Custom Sections has none. So this notebook does one full pass over the
-# MAGIC changes stream **per scope**, each with its own starting
-# MAGIC token/date and its own sync-state table.
+# MAGIC `ajman/config.py` and the initial load in `part3_load/ajman/`). So
+# MAGIC this notebook does one full pass over the changes stream **per
+# MAGIC scope**, each with its own starting token/date and its own
+# MAGIC sync-state table.
 # MAGIC
-# MAGIC This costs more Pure API traffic than HBKU's combined pass (each of
-# MAGIC the 3 passes re-walks the same underlying shared stream, filtered
-# MAGIC client-side to just one scope's families) — accepted trade-off so that
-# MAGIC each scope can safely start from its own cutoff. Once all 3 scopes
-# MAGIC have caught up to the same point in the stream, their resumption
-# MAGIC tokens converge again in practice, even though they're stored and
-# MAGIC advanced independently.
+# MAGIC This costs more Pure API traffic than HBKU's combined pass (each pass
+# MAGIC re-walks the same underlying shared stream, filtered client-side to
+# MAGIC just one scope's families) — accepted trade-off so that each scope can
+# MAGIC safely start from its own cutoff. Once both scopes have caught up to
+# MAGIC the same point in the stream, their resumption tokens converge again
+# MAGIC in practice, even though they're stored and advanced independently.
 
 # COMMAND ----------
 
@@ -66,13 +69,14 @@ logger.info("Scopes: %s", list(cfg.keys()))
 
 # COMMAND ----------
 
-# Defaults to running all 3 scopes together (the regular pipeline mode), but
+# Defaults to running both scopes together (the regular pipeline mode), but
 # can be narrowed to a single scope — useful when one scope's cutoff is
-# closer to Pure's 30-day /changes limit than the others' and needs to run
-# NOW without also advancing (and later having to reset) another scope's
-# resumption token before it's ready (e.g. Scholarly Activities, still
-# waiting on a fresh processed_* snapshot as of 2026-07-23 — see project
-# memory).
+# closer to Pure's 30-day /changes limit than the other's and needs to run
+# NOW without also advancing (and later having to reset) the other scope's
+# resumption token before it's ready. This is how Grants ran first on
+# 2026-07-23 (232 CREATE events, confirmed from the real 2026-06-25 cutoff)
+# while Scholarly Activities waited on a fresh processed_* snapshot — see
+# project memory.
 dbutils.widgets.text("SCOPE", "ALL", "Scope to run (or ALL)")
 scope_widget = dbutils.widgets.get("SCOPE")
 scopes_to_run = cfg if scope_widget == "ALL" else {scope_widget: cfg[scope_widget]}

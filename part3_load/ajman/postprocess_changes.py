@@ -1,12 +1,15 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Part 3 — Postprocess changes into FAR upload templates
-# MAGIC Reads today's `enriched_<scope>_<CURRENT_DAY>` tables from Part 2
-# MAGIC (same `CURRENT_DAY`, same reasoning as Part 2 reading Part 1's
-# MAGIC tables — all 3 notebooks run in the same pipeline execution), builds
-# MAGIC one row per (record, internal author), and runs it through the
-# MAGIC matching `far_templates.py` transformer to produce Faculty180's
-# MAGIC upload column shape.
+# MAGIC # Part 3 — Postprocess changes into FAR upload templates (Ajman)
+# MAGIC **Grants + Scholarly Activities only** — Custom Sections is
+# MAGIC explicitly out of scope for Ajman (confirmed with the user
+# MAGIC 2026-07-23; stays HBKU-only, see `hbku/postprocess_changes.py` for
+# MAGIC that scope's handling). Reads today's `enriched_<scope>_<CURRENT_DAY>`
+# MAGIC tables from Part 2 (same `CURRENT_DAY`, same reasoning as Part 2
+# MAGIC reading Part 1's tables — all notebooks run in the same pipeline
+# MAGIC execution), builds one row per (record, internal author), and runs it
+# MAGIC through the matching `far_templates.py` transformer to produce
+# MAGIC Faculty180's upload column shape.
 # MAGIC
 # MAGIC **Why this is simpler than `tss-dedup`'s `Step3_Postprocessor`:**
 # MAGIC that notebook's `unmatched_full_{type}` join and
@@ -18,11 +21,6 @@
 # MAGIC main table INNER JOINed with its authors table filtered to internal +
 # MAGIC resolved `faculty_id` rows. That join is already one row per
 # MAGIC (record, internal author), so there is nothing left to explode.
-# MAGIC
-# MAGIC **Custom Sections is the one exception:** Part 2 explodes its
-# MAGIC participants IN PLACE (no separate authors table — see
-# MAGIC `enrich_changes.py`), so the internal-row filter is applied directly
-# MAGIC to the main table here instead of to a joined authors table.
 # MAGIC
 # MAGIC **DELETE records get a minimal CSV, not a FAR template** — Part 2
 # MAGIC only passes through `uuid`/`scope`/`changeType` for deletes (the Pure
@@ -84,6 +82,8 @@ logger.propagate = False
 
 # COMMAND ----------
 
+# No Custom Sections transformers here — out of scope for Ajman (confirmed
+# with the user 2026-07-23; stays HBKU-only).
 TRANSFORMER_MAP = {
     "Book": Pure_Books_Transformer,
     "Chapter": Pure_Chapter_Transformer,
@@ -93,10 +93,6 @@ TRANSFORMER_MAP = {
     "Patent": Pure_Patent_Transformer,
     "Editorial": Pure_Editorial_Transformer,
     "Award": Pure_Grants_Transformer,
-    "Service: Professional": Pure_Custom_SP_Transformer,
-    "Service: University - other than Committees": Pure_Custom_SU_Transformer,
-    "Other: Professional Membership": Pure_Custom_OPM_Transformer,
-    "Other: Consulting": Pure_Custom_Consulting_Transformer,
 }
 
 # COMMAND ----------
@@ -424,65 +420,14 @@ else:
 
 # COMMAND ----------
 
-# MAGIC %md
-# MAGIC ## Custom Sections
-
-# COMMAND ----------
-
-custom_cfg = FAR_TEMPLATES_CONFIG["Custom Sections"]
-type_slug_map = custom_cfg["type_slug"]
-
-custom_sections_df = read_enriched_table(f"enriched_custom_sections_{CURRENT_DAY}")
-log_unmapped_subtypes(custom_sections_df, "subtype", custom_cfg["types"], "custom_sections")
-
-for type_name in custom_cfg["types"]:
-    # No authors_df: Part 2 already explodes participants in place, so
-    # build_far_template just filters custom_sections_df to internal rows
-    # directly instead of joining a separate authors table.
-    df_template = build_far_template(
-        custom_sections_df, type_name, TRANSFORMER_MAP[type_name],
-        authors_df=None, subtype_filter_col="subtype",
-    )
-    if df_template.empty:
-        logger.info("[custom_sections] no records for type %s today.", type_name)
-        continue
-
-    df_template["Review"] = "To be Reviewed"
-    df_template = normalize_columns(df_template).drop_duplicates()
-
-    suffix = type_table_suffix(type_name, type_slug_map)
-    save_table(df_template, f"far_results_{suffix}_{CURRENT_DAY}")
-    save_table(df_template.sample(min(50, len(df_template))), f"far_sample_results_{suffix}_{CURRENT_DAY}")
-
-    upload_split_by_changetype(
-        df_template, custom_cfg["sftp_folder"],
-        lambda status_folder: f"Faculty180_{suffix}_{YEAR}-{MONTH}-{DAY}_01.csv",
-    )
-
-    # No collaborator file for Custom Sections -- same as the original
-    # (it has no author data at all, internal or external).
-    logger.info("[custom_sections] %s: %d rows exported", type_name, len(df_template))
-
-# COMMAND ----------
-
-custom_sections_deletes_df = build_deletes_export(read_enriched_table(f"enriched_custom_sections_deletes_{CURRENT_DAY}"))
-if not custom_sections_deletes_df.empty:
-    remote_path = upload_df_to_sftp(
-        csv_ready(custom_sections_deletes_df), SFTP_BASE, custom_cfg["sftp_folder"], "deletes",
-        f"Faculty180_deletes_{YEAR}-{MONTH}-{DAY}_01.csv", logger, secret_scope=SFTP_SECRET_SCOPE,
-    )
-    logger.info("[custom_sections] uploaded %d deletes to %s", len(custom_sections_deletes_df), remote_path)
-else:
-    logger.info("[custom_sections] no deletes to upload today.")
-
-# COMMAND ----------
+# No Custom Sections section here — out of scope for Ajman (confirmed with
+# the user 2026-07-23; stays HBKU-only).
 
 status_map = {"CREATE": "new", "UPDATE": "update"}
 
 scope_tables = {
     "scholarly_activities": ("enriched_research_output", "enriched_research_output_deletes"),
     "grants": ("enriched_grants", "enriched_grants_deletes"),
-    "custom_sections": ("enriched_custom_sections", "enriched_custom_sections_deletes"),
 }
 
 summary_rows = []
@@ -493,7 +438,7 @@ for scope, (main_table, deletes_table) in scope_tables.items():
         if scope == "scholarly_activities":
             main_df["type"] = main_df["subtype"].map(scholarly_cfg["subtype_to_type"])
         else:
-            main_df["type"] = main_df["subtype"]  # Grants/Custom Sections: no further homologation needed
+            main_df["type"] = main_df["subtype"]  # Grants: no further homologation needed
         counts = main_df.groupby(["type", "changeType"]).size().reset_index(name="count")
         for _, row in counts.iterrows():
             summary_rows.append({

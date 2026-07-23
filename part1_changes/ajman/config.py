@@ -12,17 +12,20 @@ DATABASE = "academicinformationsystems_technicalservices.ajman"
 INGEST_TS = datetime.now()
 CURRENT_DAY = INGEST_TS.strftime("%Y%m%d")
 
-# Unlike HBKU (one shared resumptionToken across all 3 scopes, since every
+# Unlike HBKU (one shared resumptionToken across all scopes, since every
 # scope needed to resume from roughly the same point), Ajman already has
 # pre-existing data loaded separately up to a per-scope cutoff (see the
 # initial load in part3_load/ajman/) — so each scope must resume its Changes
 # stream from its OWN cutoff, not a shared one. This only means calling
 # get_last_resumption_token / save_resumption_token once per scope with a
 # different table_name each time — sync_state.py itself needed no changes.
+#
+# Ajman is Grants + Scholarly Activities ONLY — Custom Sections is
+# explicitly out of scope for this client (confirmed with the user
+# 2026-07-23; stays HBKU-only).
 SYNC_STATE_TABLES = {
     "Scholarly Activities": "changes_sync_state_scholarly_activities",
     "Grants": "changes_sync_state_grants",
-    "Custom Sections": "changes_sync_state_custom_sections",
 }
 
 # The processed_* snapshot cutoffs — the actual initial-load cutoff dates,
@@ -78,16 +81,11 @@ def _resolve_since_date(scope_name: str, cutoff_str: str) -> str:
 # i.e. before that scope's entry in SYNC_STATE_TABLES has a saved
 # resumptionToken. Every run after that resumes from that scope's own
 # persisted token instead of this date — see part1_changes/sync_state.py.
-#
-# - Scholarly Activities / Grants: resolved dynamically against their real
-#   snapshot cutoff, see _resolve_since_date above.
-# - Custom Sections: no prior snapshot exists for this scope (starts from
-#   zero, no initial load) — so it starts from whenever this pipeline first
-#   runs, computed dynamically rather than a fixed date.
+# Resolved dynamically against each scope's real snapshot cutoff, see
+# _resolve_since_date above.
 DEFAULT_SINCE_DATES = {
     "Scholarly Activities": _resolve_since_date("Scholarly Activities", PROCESSED_SNAPSHOT_CUTOFFS["Scholarly Activities"]),
     "Grants": _resolve_since_date("Grants", PROCESSED_SNAPSHOT_CUTOFFS["Grants"]),
-    "Custom Sections": INGEST_TS.strftime("%Y-%m-%d"),
 }
 
 # Fallback used only by generic/diagnostic scripts (discover_families.py,

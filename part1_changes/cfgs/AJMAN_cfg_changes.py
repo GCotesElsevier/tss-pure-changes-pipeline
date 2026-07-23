@@ -1,18 +1,18 @@
 # Databricks notebook source
 # MAGIC %md
 # MAGIC ### Changes config — scope to Pure family homologation (Ajman)
-# MAGIC Same family names as HBKU (`HBKU_cfg_changes.py`), copied as a
-# MAGIC starting assumption per the onboarding checklist — **not yet
-# MAGIC confirmed against Ajman's real Pure instance**. Run
-# MAGIC `ajman/discover_families.py` once connected to Databricks and update
-# MAGIC this file if the real `familySystemName` values differ (HBKU's own
-# MAGIC `Award` family, for example, took extra diagnosis to confirm — see
-# MAGIC part1_changes/README.md).
+# MAGIC **Ajman only needs Grants and Scholarly Activities** — Custom Sections
+# MAGIC is explicitly out of scope for this client (confirmed with the user
+# MAGIC 2026-07-23; it stays HBKU-only for now). Family names copied from
+# MAGIC HBKU (`HBKU_cfg_changes.py`) as a starting assumption per the
+# MAGIC onboarding checklist. `Grants` is now CONFIRMED against real data —
+# MAGIC `fetch_changes.py` pulled 232 real CREATE events for it on 2026-07-23.
+# MAGIC `ResearchOutput` (Scholarly Activities) is still unconfirmed — run
+# MAGIC `ajman/discover_families.py` if it doesn't behave as expected.
 
 # COMMAND ----------
 
 CHANGES_CONFIG = {
     "Scholarly Activities": {"pure_families": ["ResearchOutput"]},
     "Grants": {"pure_families": ["Award", "Project"]},
-    "Custom Sections": {"pure_families": ["Activity"]},
 }

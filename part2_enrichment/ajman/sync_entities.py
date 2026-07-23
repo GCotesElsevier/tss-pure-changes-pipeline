@@ -1,12 +1,18 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Part 2 — Sync supporting entities
-# MAGIC Keeps Person, Event, Publisher, InternalOrganization, and
-# MAGIC ExternalOrganization up to date in this repo's own `sync_*` tables.
-# MAGIC Safe to run every time the pipeline runs: `entity_sync.sync_entity`
-# MAGIC does a full load the first time (or for InternalOrganization, every
-# MAGIC time — Pure's legacy API has no incremental query for it) and an
+# MAGIC # Part 2 — Sync supporting entities (Ajman)
+# MAGIC Keeps Person, Event, Publisher, and ExternalOrganization up to date in
+# MAGIC this repo's own `sync_*` tables. Safe to run every time the pipeline
+# MAGIC runs: `entity_sync.sync_entity` does a full load the first time and an
 # MAGIC incremental pull after that.
+# MAGIC
+# MAGIC **No InternalOrganization here, unlike HBKU** — it was only ever
+# MAGIC needed to resolve Custom Sections' `managing_organization`/`member_of`
+# MAGIC names, and Custom Sections is out of scope for Ajman (confirmed with
+# MAGIC the user 2026-07-23). Also convenient: Pure's legacy API has no
+# MAGIC incremental query for it, so HBKU's copy does a full reload every
+# MAGIC single run — skipping it for Ajman avoids that recurring cost for an
+# MAGIC entity nothing here actually reads.
 
 # COMMAND ----------
 
@@ -51,14 +57,10 @@ pure_api = PureAPI(base_url=API_URL, api_key=API_KEY)
 legacy_api = LegacyPureAPI(base_url=LEGACY_URL, api_key=LEGACY_API_KEY)
 
 # (table_name, end_point, legacy_end_point, query_field, process_fn)
-# InternalOrganization's legacy_end_point is intentionally empty: Pure's
-# legacy API has no incremental query for it, so entity_sync.sync_entity
-# always does a full reload for it.
 entities = [
     (PERSON_TABLE, "persons", "persons", "personsQuery", process_person),
     (EVENT_TABLE, "events", "events", "eventsQuery", process_event),
     (PUBLISHER_TABLE, "publishers", "publishers", "publishersQuery", process_publisher),
-    (INTERNAL_ORG_TABLE, "organizations", "", "", process_organization),
     (EXTERNAL_ORG_TABLE, "external-organizations", "external-organisations", "externalOrganisationsQuery", process_organization),
 ]
 

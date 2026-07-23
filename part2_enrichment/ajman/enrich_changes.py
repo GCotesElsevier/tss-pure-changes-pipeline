@@ -1,8 +1,9 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Part 2 — Enrich changes (main orchestration)
-# MAGIC For each of the 3 scopes (Scholarly Activities / Research Output,
-# MAGIC Custom Sections / Activity, Grants), reads today's
+# MAGIC # Part 2 — Enrich changes (main orchestration, Ajman)
+# MAGIC **Ajman is Grants + Scholarly Activities only** — Custom Sections is
+# MAGIC explicitly out of scope for this client (confirmed with the user
+# MAGIC 2026-07-23; stays HBKU-only). For each scope, reads today's
 # MAGIC `changes_<scope>_<CURRENT_DAY>` table written by Part 1's
 # MAGIC `fetch_changes.py` (same `CURRENT_DAY`, since both notebooks run in the
 # MAGIC same pipeline execution — no need to search for the "latest" table),
@@ -10,15 +11,14 @@
 # MAGIC 1. Fetches the full Pure record (Grants uses `grants_merge.py` to pair
 # MAGIC    a changed Project/Award with its counterpart).
 # MAGIC 2. Applies the scope's transform config
-# MAGIC    (`RESEARCH_OUTPUT_TRANSFORM_CONFIG` / `ACTIVITY_TRANSFORM_CONFIG` /
-# MAGIC    `GRANTS_TRANSFORM_CONFIG`).
+# MAGIC    (`RESEARCH_OUTPUT_TRANSFORM_CONFIG` / `GRANTS_TRANSFORM_CONFIG`).
 # MAGIC 3. Joins with the support entity tables (`sync_publishers`,
 # MAGIC    `sync_events`, `sync_internal_organizations` +
 # MAGIC    `sync_external_organizations`).
-# MAGIC 4. Explodes `contributors` / `persons` / `participants` (kept raw by
-# MAGIC    the transform configs on purpose — see `participant_explode.py`)
-# MAGIC    and resolves each internal participant's FAR `faculty_id` via
-# MAGIC    email (Pure never carries a FAR id directly).
+# MAGIC 4. Explodes `contributors` / `participants` (kept raw by the transform
+# MAGIC    configs on purpose — see `participant_explode.py`) and resolves each
+# MAGIC    internal participant's FAR `faculty_id` via email (Pure never
+# MAGIC    carries a FAR id directly).
 # MAGIC
 # MAGIC DELETE records are NOT enriched — the Pure record is already gone by
 # MAGIC the time the change event shows up, so there is nothing to fetch and
@@ -30,11 +30,8 @@
 # MAGIC `enriched_` prefix so these never collide with `ip-pure2far-integration`'s
 # MAGIC own un-prefixed tables in the same catalog):
 # MAGIC - `enriched_research_output_<date>` + `enriched_research_output_authors_<date>`
-# MAGIC - `enriched_custom_sections_<date>` (participants exploded IN PLACE — one
-# MAGIC   row per activity+participant, no separate table, same as the original
-# MAGIC   `ActivityDataProcessor`)
 # MAGIC - `enriched_grants_<date>` + `enriched_grants_authors_<date>`
-# MAGIC - `enriched_<scope>_deletes_<date>` (all 3 scopes, same minimal shape)
+# MAGIC - `enriched_<scope>_deletes_<date>` (both scopes, same minimal shape)
 # MAGIC
 # MAGIC **Known gaps / deliberately NOT replicated from the old pipeline**
 # MAGIC (left for Part 3, or flagged as unconfirmed):
@@ -87,10 +84,6 @@
 
 # COMMAND ----------
 
-# MAGIC %run ../cfgs/AJMAN_cfg_transform_activity
-
-# COMMAND ----------
-
 # MAGIC %run ../cfgs/AJMAN_cfg_transform_grants
 
 # COMMAND ----------
@@ -131,15 +124,13 @@ logger.propagate = False
 
 # COMMAND ----------
 
-# Support entity tables — loaded once, reused across all 3 scopes.
+# Support entity tables — loaded once, reused across both scopes. No
+# internal_orgs_df here (unlike HBKU) — it only ever fed Custom Sections'
+# org name resolution, and Custom Sections is out of scope for Ajman.
 persons_df = spark.table(f"{DATABASE}.{PERSON_TABLE}").toPandas()
 events_df = spark.table(f"{DATABASE}.{EVENT_TABLE}").toPandas()
 publishers_df = spark.table(f"{DATABASE}.{PUBLISHER_TABLE}").toPandas()
-internal_orgs_df = spark.table(f"{DATABASE}.{INTERNAL_ORG_TABLE}").toPandas()
 external_orgs_df = spark.table(f"{DATABASE}.{EXTERNAL_ORG_TABLE}").toPandas()
-
-orgs_df = pd.concat([internal_orgs_df, external_orgs_df], ignore_index=True)
-org_name_by_uuid = orgs_df.set_index("uuid")["name"].to_dict()
 
 publisher_lookup = publishers_df[["uuid", "name", "country"]].rename(
     columns={"uuid": "publisher_uuid", "name": "publisher_name", "country": "publisher_country"}
@@ -241,10 +232,6 @@ def build_deletes_table(deletes_df: pd.DataFrame, scope_slug: str) -> pd.DataFra
     return deletes_df[["uuid", "changeType", "version"]].assign(scope=scope_slug)
 
 
-def build_org_name_map(uuid_series: pd.Series) -> pd.Series:
-    return uuid_series.map(org_name_by_uuid)
-
-
 def save_table(df: pd.DataFrame, table_name: str) -> None:
     full_table_name = f"{DATABASE}.{table_name}"
     if df.empty:
@@ -318,43 +305,6 @@ def process_research_output(changes_rows: pd.DataFrame):
 
 # COMMAND ----------
 
-def process_custom_sections(changes_rows: pd.DataFrame) -> pd.DataFrame:
-    if changes_rows.empty:
-        return pd.DataFrame()
-
-    uuids = changes_rows["uuid"].tolist()
-    raw_records = fetch_records_parallel(
-        lambda uuid: pure_api.read_record("activities", uuid), uuids, label="activities"
-    )
-    flat = flatten_dataframe(raw_records)
-    result = apply_transforms(flat, ACTIVITY_TRANSFORM_CONFIG)
-
-    # ACTIVITY_TRANSFORM_CONFIG's "type" is "{typeDiscriminator}: {term}"
-    # (e.g. "Service: Professional") -- the same value tss-dedup's own
-    # Step0 renames to "subtype" for Custom Sections (and fixes "type" to
-    # the literal "Custom Sections"), since Part 3's per-type filtering
-    # expects a "subtype" column, same as Research Output/Grants.
-    result = result.rename(columns={"type": "subtype"})
-    result["type"] = "Custom Sections"
-
-    # Carried through to Part 3, which needs it to split the FAR CSV
-    # exports into new/ vs updates/ SFTP subfolders.
-    result = result.merge(changes_rows[["uuid", "changeType"]], how="left", on="uuid")
-
-    result["managing_organization"] = build_org_name_map(result["managing_organization_uuid"])
-    result["member_of_name"] = build_org_name_map(result["member_of_uuid"])
-    result = result.drop(columns=["managing_organization_uuid", "member_of_uuid"])
-
-    # Custom Sections has no separate participant table (unlike Research
-    # Output / Grants) — `persons` is exploded IN PLACE, one row per
-    # activity+participant, same as the original ActivityDataProcessor.
-    participants = explode_participants(result, id_column="uuid", list_column="persons", language=LANGUAGE)
-    participants = attach_faculty_id(participants, persons_df, email_to_faculty_id)
-
-    return result.drop(columns=["persons"]).merge(participants, how="left", on="uuid")
-
-# COMMAND ----------
-
 def process_grants(changes_rows: pd.DataFrame):
     if changes_rows.empty:
         return pd.DataFrame(), pd.DataFrame()
@@ -393,20 +343,6 @@ research_output_deletes_df = build_deletes_table(scholarly_deletes, "scholarly_a
 save_table(research_output_df, f"enriched_research_output_{CURRENT_DAY}")
 save_table(research_output_authors_df, f"enriched_research_output_authors_{CURRENT_DAY}")
 save_table(research_output_deletes_df, f"enriched_research_output_deletes_{CURRENT_DAY}")
-
-# COMMAND ----------
-
-custom_sections_changes = read_changes_table("custom_sections")
-custom_sections_non_deletes, custom_sections_deletes = split_deletes(custom_sections_changes)
-logger.info(
-    "[custom_sections] %d to enrich, %d deletes", len(custom_sections_non_deletes), len(custom_sections_deletes)
-)
-
-custom_sections_df = process_custom_sections(custom_sections_non_deletes)
-custom_sections_deletes_df = build_deletes_table(custom_sections_deletes, "custom_sections")
-
-save_table(custom_sections_df, f"enriched_custom_sections_{CURRENT_DAY}")
-save_table(custom_sections_deletes_df, f"enriched_custom_sections_deletes_{CURRENT_DAY}")
 
 # COMMAND ----------
 
