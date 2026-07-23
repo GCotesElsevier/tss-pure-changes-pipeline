@@ -474,3 +474,46 @@ if not custom_sections_deletes_df.empty:
     logger.info("[custom_sections] uploaded %d deletes to %s", len(custom_sections_deletes_df), remote_path)
 else:
     logger.info("[custom_sections] no deletes to upload today.")
+
+# COMMAND ----------
+
+status_map = {"CREATE": "new", "UPDATE": "update"}
+
+scope_tables = {
+    "scholarly_activities": ("enriched_research_output", "enriched_research_output_deletes"),
+    "grants": ("enriched_grants", "enriched_grants_deletes"),
+    "custom_sections": ("enriched_custom_sections", "enriched_custom_sections_deletes"),
+}
+
+summary_rows = []
+
+for scope, (main_table, deletes_table) in scope_tables.items():
+    try:
+        main_df = spark.table(f"{DATABASE}.{main_table}_{CURRENT_DAY}").select("subtype", "changeType").toPandas()
+        if scope == "scholarly_activities":
+            main_df["type"] = main_df["subtype"].map(scholarly_cfg["subtype_to_type"])
+        else:
+            main_df["type"] = main_df["subtype"]  # Grants/Custom Sections: no further homologation needed
+        counts = main_df.groupby(["type", "changeType"]).size().reset_index(name="count")
+        for _, row in counts.iterrows():
+            summary_rows.append({
+                "scope": scope,
+                "subtype": row["type"],  # column name kept as "subtype" in the printed table, holds the resolved type
+                "status": status_map.get(row["changeType"], row["changeType"]),
+                "count": row["count"],
+            })
+    except Exception:
+        pass
+
+    try:
+        deletes_df = spark.table(f"{DATABASE}.{deletes_table}_{CURRENT_DAY}").toPandas()
+        if not deletes_df.empty:
+            summary_rows.append({"scope": scope, "subtype": "(n/a)", "status": "delete", "count": len(deletes_df)})
+    except Exception:
+        pass
+
+summary_df = pd.DataFrame(summary_rows).sort_values(["scope", "status", "subtype"]).reset_index(drop=True)
+summary_df = summary_df[["scope", "status", "subtype", "count"]]
+print(summary_df.to_string(index=False))
+print(f"\nTOTAL: {summary_df['count'].sum()}")
+
