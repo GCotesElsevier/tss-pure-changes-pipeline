@@ -25,11 +25,22 @@ SYNC_STATE_TABLES = {
     "Custom Sections": "changes_sync_state_custom_sections",
 }
 
-# The processed_* snapshot cutoffs the user gave us when this was designed
-# (2026-07-09) — the actual initial-load cutoff dates, NOT necessarily still
-# usable as a `/changes` start date (see PROCESSED_SNAPSHOT_CUTOFFS below).
+# The processed_* snapshot cutoffs — the actual initial-load cutoff dates,
+# NOT necessarily still usable as a `/changes` start date (see
+# PROCESSED_SNAPSHOT_CUTOFFS below).
+#
+# - Scholarly Activities: updated 2026-07-23 — the original 2026-06-11
+#   cutoff had already exceeded Pure's 30-day /changes window by the time
+#   this was picked back up, so the team re-ran a fresh FULL load instead of
+#   an incremental catch-up, producing processed_researchoutputs_20260723 /
+#   processed_author_20260723 (see part3_load/ajman/initial_load_research_output.py,
+#   updated to match). Being a full reload (not a delta), this cutoff is
+#   comprehensive on its own — no gap, no merge with the old 06-11 table
+#   needed.
+# - Grants: 2026-06-25, confirmed still valid — Part 1 already ran
+#   successfully for this scope starting from this exact date (2026-07-23).
 PROCESSED_SNAPSHOT_CUTOFFS = {
-    "Scholarly Activities": "2026-06-11",
+    "Scholarly Activities": "2026-07-23",
     "Grants": "2026-06-25",
 }
 

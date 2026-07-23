@@ -4,14 +4,22 @@
 # MAGIC **One-time notebook, NOT part of the regular pipeline.** Run once,
 # MAGIC before `part1_changes/ajman/fetch_changes.py` starts polling Scholarly
 # MAGIC Activities changes from `DEFAULT_SINCE_DATES["Scholarly Activities"]`
-# MAGIC (2026-06-11).
+# MAGIC (2026-07-23).
 # MAGIC
-# MAGIC Ajman already has Research Output data loaded up to 2026-06-11 by
-# MAGIC `ip-pure2far-integration` (a separate repo, run once/separately — see
-# MAGIC `ajman_research_output/initial_load.py`) into
-# MAGIC `processed_researchoutputs_20260611` / `processed_author_20260611`.
-# MAGIC That data was never matched against FAR or uploaded — `initial_load.py`
-# MAGIC only talks to Pure — so this notebook:
+# MAGIC **Updated 2026-07-23:** the original plan used
+# MAGIC `processed_researchoutputs_20260611` / `processed_author_20260611`, but
+# MAGIC that 2026-06-11 cutoff had already exceeded Pure's 30-day /changes
+# MAGIC window by the time this was picked back up. Instead of accepting the
+# MAGIC resulting gap, the `ip-pure2far-integration` team re-ran a fresh FULL
+# MAGIC load (not incremental) for Ajman, producing
+# MAGIC `processed_researchoutputs_20260723` / `processed_author_20260723` —
+# MAGIC `SOURCE_CUTOFF` below now points at that table. Being a full reload,
+# MAGIC it's comprehensive on its own; no merge with the old 06-11 table is
+# MAGIC needed.
+# MAGIC
+# MAGIC That data was never matched against FAR or uploaded — the
+# MAGIC `ip-pure2far-integration` load scripts only talk to Pure — so this
+# MAGIC notebook:
 # MAGIC 1. Reads those two tables.
 # MAGIC 2. Fetches FAR's user directory and joins `faculty_id` onto the author
 # MAGIC    table by email (same join `enrich_changes.py` does for the regular
@@ -26,9 +34,7 @@
 # MAGIC **TODO(user) before running:**
 # MAGIC - Run `discover_initial_load_tables.py` first and confirm
 # MAGIC   `SOURCE_RESEARCH_OUTPUT_TABLE` / `SOURCE_AUTHOR_TABLE` below are the
-# MAGIC   real table names (assumed here: `ip-pure2far-integration`'s own
-# MAGIC   `processed_researchoutputs` / `processed_author`, suffixed with the
-# MAGIC   2026-06-11 cutoff) and that the author table really has an `email`
+# MAGIC   real table names and that the author table really has an `email`
 # MAGIC   column.
 # MAGIC - Fill in `config.py`'s FAR_DATABASE, FAR secrets, and SFTP_BASE.
 
@@ -78,7 +84,7 @@ logger.propagate = False
 
 # COMMAND ----------
 
-SOURCE_CUTOFF = "20260611"
+SOURCE_CUTOFF = "20260723"  # fresh full load, confirmed by the ip-pure2far-integration team (2026-07-23)
 SOURCE_RESEARCH_OUTPUT_TABLE = f"processed_researchoutputs_{SOURCE_CUTOFF}"
 SOURCE_AUTHOR_TABLE = f"processed_author_{SOURCE_CUTOFF}"
 
