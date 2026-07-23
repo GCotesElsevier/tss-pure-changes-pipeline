@@ -72,6 +72,10 @@
 
 # COMMAND ----------
 
+# MAGIC %run ./far_users_source
+
+# COMMAND ----------
+
 # MAGIC %run ../grants_merge
 
 # COMMAND ----------
@@ -153,14 +157,10 @@ event_lookup = events_df[["uuid", "type", "title", "city", "country", "startDate
 # `faculty_id` — Pure has no native FAR id (see tss-dedup Step0's original
 # email -> primary_id join, replicated here under the name `faculty_id` to
 # avoid colliding with sync_persons.primary_id, an unrelated Pure-internal
-# identifier).
-far_client = FARUsersClient(public_key=FAR_PUBLIC_KEY, private_key=FAR_PRIVATE_KEY, database=FAR_DATABASE)
-far_users = far_client.fetch_all_users()
-email_to_faculty_id = {
-    user["email"].strip().lower(): user["userid"]
-    for user in far_users
-    if user.get("email") and user.get("userid") is not None
-}
+# identifier). See far_users_source.py / config.py's FAR_USERS_SOURCE —
+# Ajman's FAR API isn't provisioned yet, so this currently reads a CSV
+# bypass instead of calling the real API.
+email_to_faculty_id = get_email_to_faculty_id(spark, logger)
 logger.info("Loaded %d FAR users for email -> faculty_id lookup", len(email_to_faculty_id))
 
 # COMMAND ----------

@@ -9,12 +9,32 @@ LEGACY_URL = dbutils.secrets.get(scope='integration-delivery-services', key='pur
 API_KEY = dbutils.secrets.get(scope='integration-delivery-services', key='pure-ajman-prod-api-key')
 API_URL = dbutils.secrets.get(scope='integration-delivery-services', key='pure-ajman-base-url')
 
-# New secrets, mirroring hbku-far-api-public-key/private-key — Ajman's
-# Faculty180 HMAC-signed API credentials.
-FAR_PUBLIC_KEY = dbutils.secrets.get(scope='integration-delivery-services', key='ajman-far-api-public-key')
-FAR_PRIVATE_KEY = dbutils.secrets.get(scope='integration-delivery-services', key='ajman-far-api-private-key')
+# Ajman's Faculty180 API access is still being provisioned (support ticket
+# in progress, 2026-07-23) — meanwhile, far_users_source.py reads a CSV the
+# user exported directly from Faculty180 (has faculty_id + email columns)
+# instead of calling the real API. Switch this to "api" once Ajman's FAR
+# API access is confirmed working — nothing else needs to change,
+# enrich_changes.py / initial_load_merge_base_snapshot.py both go through
+# far_users_source.get_email_to_faculty_id() either way.
+FAR_USERS_SOURCE = "csv_bypass"  # "csv_bypass" or "api"
+
+# TODO(user): confirm the real path after uploading the CSV to Databricks
+# (DBFS or a Unity Catalog Volume).
+FAR_USERS_CSV_PATH = "dbfs:/FileStore/ajman/far_users_bypass.csv"
+
+if FAR_USERS_SOURCE == "api":
+    # New secrets, mirroring hbku-far-api-public-key/private-key — Ajman's
+    # Faculty180 HMAC-signed API credentials. Only resolved when actually
+    # needed — fetching them eagerly would break the CSV bypass path too,
+    # since these secrets don't exist yet.
+    FAR_PUBLIC_KEY = dbutils.secrets.get(scope='integration-delivery-services', key='ajman-far-api-public-key')
+    FAR_PRIVATE_KEY = dbutils.secrets.get(scope='integration-delivery-services', key='ajman-far-api-private-key')
+else:
+    FAR_PUBLIC_KEY = None
+    FAR_PRIVATE_KEY = None
+
 # TODO(user): confirm Ajman's real Faculty180 database identifier
-# (HBKU's is "hbku_dev") before running anything that imports this file.
+# (HBKU's is "hbku_dev") before switching FAR_USERS_SOURCE to "api".
 FAR_DATABASE = "REPLACE_ME_AJMAN_FAR_DATABASE"
 
 # Confirmed against ip-pure2far-integration/ajman_research_output/config.py
