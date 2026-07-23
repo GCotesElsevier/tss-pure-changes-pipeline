@@ -27,7 +27,10 @@ class PureChangesClient:
     def _get_page(self, token_or_date: str) -> dict:
         url = f"{self.base_url}/changes/{token_or_date}"
         headers = {"accept": "application/json", "api-key": self.api_key}
-        response = requests.get(url, headers=headers, verify=self.verify_ssl)
+        # No timeout meant a single stalled connection could hang forever —
+        # same class of bug found and fixed in pure_api_client.py
+        # 2026-07-23 (see that file for the full story).
+        response = requests.get(url, headers=headers, verify=self.verify_ssl, timeout=30)
         if response.status_code != 200:
             raise Exception(f"Error {response.status_code}: {response.text}")
         return response.json()

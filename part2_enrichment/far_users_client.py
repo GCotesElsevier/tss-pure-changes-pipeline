@@ -55,8 +55,11 @@ class FARUsersClient:
 
         while True:
             headers = self._get_headers(endpoint)
+            # No timeout meant a single stalled connection could hang
+            # forever — same class of bug found and fixed in
+            # pure_api_client.py 2026-07-23 (see that file for the full story).
             response = requests.get(
-                f"{self.url}{endpoint}?data=detailed&limit={limit}&offset={offset}", headers=headers
+                f"{self.url}{endpoint}?data=detailed&limit={limit}&offset={offset}", headers=headers, timeout=30
             )
             response.raise_for_status()
             data = response.json()

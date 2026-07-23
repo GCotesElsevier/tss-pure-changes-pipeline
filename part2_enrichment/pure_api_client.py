@@ -34,7 +34,14 @@ class PureAPI:
     def _get(self, end_point: str, params: dict = None) -> dict:
         url = f"{self.base_url}/{end_point}"
         headers = {"accept": "application/json", "api-key": self.api_key}
-        response = requests.get(url, headers=headers, params=params, verify=False)
+        # No timeout meant a single stalled connection could hang forever
+        # with no way to recover — found 2026-07-23 when Ajman's
+        # journal_impact_factor backfill (~5100 individual calls) appeared
+        # to freeze near the end. Callers already catch broad exceptions
+        # around calls that can legitimately fail (e.g.
+        # fetch_journal_impact_factor), so a timeout just turns "hangs
+        # forever" into "fails like any other error".
+        response = requests.get(url, headers=headers, params=params, verify=False, timeout=30)
         if response.status_code != 200:
             raise Exception(f"Error {response.status_code} for {url}: {response.text}")
         return response.json()
@@ -114,7 +121,7 @@ class LegacyPureAPI:
 
         while True:
             payload = self._build_payload(query_field, size, offset, since_datetime)
-            response = requests.post(f"{self.base_url}/{end_point}", headers=headers, data=payload, verify=False)
+            response = requests.post(f"{self.base_url}/{end_point}", headers=headers, data=payload, verify=False, timeout=30)
             if response.status_code != 200:
                 raise Exception(f"Error {response.status_code}: {response.text}")
 
