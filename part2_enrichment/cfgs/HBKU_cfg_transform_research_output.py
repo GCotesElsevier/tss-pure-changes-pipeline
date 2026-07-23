@@ -107,4 +107,5 @@ RESEARCH_OUTPUT_TRANSFORM_CONFIG = {   'pureId': {'actions': [{'type': 'cast', '
     'volume': {'actions': [{'type': 'add'}]},
     'edition': {'actions': [{'type': 'add'}]},
     'numberOfPages': {'actions': [{'type': 'add'}]},
-    'journalNumber': {'actions': [{'type': 'add'}]}}
+    'journalNumber': {'actions': [{'type': 'add'}]},
+    'pages': {'actions': [{'type': 'add'}]}}

@@ -13,8 +13,7 @@
 # MAGIC Run this AFTER `enrich_changes.py` has already run for today (for both
 # MAGIC scopes), and BEFORE `postprocess_changes.py`. It treats the base
 # MAGIC snapshot as if it were itself a Part 2 output — enriches it the same
-# MAGIC way (email -> `faculty_id`, tag `changeType="CREATE"` since none of it
-# MAGIC has ever reached FAR) — then folds it into the SAME
+# MAGIC way (email -> `faculty_id`) — then folds it into the SAME
 # MAGIC `enriched_<scope>_<CURRENT_DAY>` / `enriched_<scope>_authors_<CURRENT_DAY>`
 # MAGIC tables `enrich_changes.py` already wrote, so `postprocess_changes.py`
 # MAGIC runs completely UNCHANGED afterwards — it has no idea some of its
@@ -25,6 +24,16 @@
 # MAGIC the real one wins (it reflects Pure's current state; the snapshot is
 # MAGIC frozen as of its cutoff) — the snapshot's row for that `uuid` is
 # MAGIC dropped before merging, not overwritten after.
+# MAGIC
+# MAGIC **`changeType` is forced to `"CREATE"` for the ENTIRE merged batch,
+# MAGIC not just the base snapshot's rows** (added 2026-07-23, after Research
+# MAGIC Output's real Changes Endpoint delta came back as 1332 `UPDATE`
+# MAGIC events, vs. Grants' 232, which happened to all be `CREATE`). This is
+# MAGIC Ajman's very first delivery — FAR has nothing to update yet, so a
+# MAGIC record Pure calls `UPDATE` (because it already existed and was
+# MAGIC edited in Pure) is still brand-new from FAR's point of view. Left
+# MAGIC alone, `postprocess_changes.py` would route those rows to the
+# MAGIC `updates/` SFTP subfolder instead of `new/`.
 # MAGIC
 # MAGIC **Run once, then never again** — after this, the regular pipeline
 # MAGIC (`fetch_changes.py` -> `enrich_changes.py` -> `postprocess_changes.py`)
@@ -237,6 +246,26 @@ def merge_scope(scope_label: str, cfg: dict) -> None:
     base_main_df = base_main_df[~base_main_df["uuid"].isin(existing_uuids)]
 
     merged_main_df = pd.concat([existing_main_df, base_main_df], ignore_index=True)
+
+    # This is Ajman's very first delivery to FAR -- nothing exists there
+    # yet, so EVERYTHING in this merged batch is new to FAR, regardless of
+    # what changeType Pure itself assigned. Real changes can legitimately
+    # be "UPDATE" from Pure's own point of view (a record that already
+    # existed in Pure got edited) even though it's still a brand-new
+    # record from FAR's point of view -- confirmed 2026-07-23 when
+    # Research Output's real changes came back as 1332 UPDATE events (vs.
+    # Grants' 232, which happened to all be CREATE). Left uncorrected,
+    # postprocess_changes.py would route those to the updates/ SFTP
+    # subfolder, where FAR has nothing to match them against.
+    if not merged_main_df.empty:
+        overridden = (merged_main_df["changeType"] != "CREATE").sum()
+        if overridden:
+            logger.info(
+                "[%s] overriding changeType to CREATE for %d row(s) that Pure reported as something else "
+                "(this is a first delivery -- nothing exists in FAR yet to update).",
+                scope_label, overridden,
+            )
+        merged_main_df["changeType"] = "CREATE"
 
     base_authors_df = normalize_base_authors(base_authors_df, cfg["author_column_renames"])
     if not base_authors_df.empty:

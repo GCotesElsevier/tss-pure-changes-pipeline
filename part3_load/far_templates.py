@@ -648,7 +648,13 @@ class Pure_Grants_Transformer(PureBaseTransformer):
             "Description": self._get_col(df, "description"),
             "URL": self._get_col(df, "url"),
             "Co-Investigator(s)": df["uuid"].map(authors_map),
-            "Type of Grant": self._get_col(df, "type"),
+            # GRANTS_TRANSFORM_CONFIG (both HBKU's and Ajman's) renames the
+            # grant-type field to "grantType", never "type" -- this read
+            # "type" (a column that never existed here) since this
+            # transformer was first ported, so "Type of Grant" always came
+            # out empty. Found 2026-07-23 while reconciling Ajman's initial
+            # load against far_templates.py's actual column reads.
+            "Type of Grant": self._get_col(df, "grantType"),
             "uuid_output": self._get_col(df, "uuid"),
         })
 
