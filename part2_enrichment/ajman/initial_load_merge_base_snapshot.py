@@ -30,20 +30,31 @@
 # MAGIC (`fetch_changes.py` -> `enrich_changes.py` -> `postprocess_changes.py`)
 # MAGIC handles everything going forward on its own.
 # MAGIC
-# MAGIC **TODO(user) before running — schema NOT yet confirmed:**
-# MAGIC run `part3_load/ajman/discover_initial_load_tables.py` first and check
-# MAGIC `BASE_SNAPSHOTS` below against the real column names, in particular:
-# MAGIC - Does the main table's linking column really match `uuid` (the same
-# MAGIC   name `enriched_<scope>_<date>` uses)?
-# MAGIC - Does the author table have an `email` column directly, or only a
-# MAGIC   person-reference column that needs joining against `sync_persons`?
-# MAGIC   `_normalize_base_authors` below tries `email` first and falls back
-# MAGIC   to a configurable person-reference column — set
-# MAGIC   `person_ref_column` per scope once confirmed.
-# MAGIC - Do the OTHER column names (title, sponsor, awardStatus, etc.) line
-# MAGIC   up with what `enrich_changes.py` produces? `log_column_diff` below
-# MAGIC   surfaces any mismatch as a warning instead of silently leaving NaNs
-# MAGIC   — check the logs after running, even if it doesn't crash.
+# MAGIC **Schema confirmed 2026-07-23** against real output of
+# MAGIC `part3_load/ajman/discover_initial_load_tables.py`:
+# MAGIC - The author tables have NO `email` and NO `person_uuid` column —
+# MAGIC   only `primary_id` (Pure's own "PrimaryId" identifier type,
+# MAGIC   confirmed the same concept `entity_transforms.py`'s `process_person`
+# MAGIC   already extracts into `sync_persons.primary_id` — NOT FAR's
+# MAGIC   `faculty_id`, a different thing entirely despite the name).
+# MAGIC   `normalize_base_authors` below joins on `primary_id` (cast to string
+# MAGIC   on both sides — the raw values look numeric) against
+# MAGIC   `sync_persons.primary_id` to get `email`, then resolves
+# MAGIC   `faculty_id` from there. External authors (`internal=0`) have a
+# MAGIC   null `primary_id` and correctly end up with no `faculty_id` — same
+# MAGIC   as the regular pipeline already does for external participants.
+# MAGIC - A few column names differ from what `enrich_changes.py` produces —
+# MAGIC   `main_column_renames` / `author_column_renames` per scope below fix
+# MAGIC   the ones that matter for the FAR templates (`far_templates.py`
+# MAGIC   reads `sponsor`/`contractid`/`internal`, the base tables have
+# MAGIC   `sponser`/`shortTitle`/`internal_flag`). Anything else that doesn't
+# MAGIC   line up gets logged by `log_column_diff` instead of silently
+# MAGIC   leaving NaNs — check the logs after running even though it won't
+# MAGIC   crash.
+# MAGIC - Grants' author table has no `sort_order` at all — assigned
+# MAGIC   sequentially per grant (order within the source table) since there
+# MAGIC   is no better signal available; harmless in practice (only affects
+# MAGIC   the co-author display order on the FAR CSV, not who's included).
 
 # COMMAND ----------
 
@@ -77,22 +88,24 @@ logger.propagate = False
 
 # COMMAND ----------
 
-# Per-scope table names. TODO(user): confirm against discover_initial_load_tables.py
-# before trusting this — see module docstring.
+# Per-scope table names and column renames, confirmed against real output
+# of discover_initial_load_tables.py (2026-07-23) — see module docstring.
 BASE_SNAPSHOTS = {
     "grants": {
         "base_main_table": "processed_grants_20260625",
-        "base_author_table": "processed_grant_author_20260625",  # TODO(user): confirm exact name (singular vs plural — see project memory)
+        "base_author_table": "processed_grant_author_20260625",
         "enriched_main_table": f"enriched_grants_{CURRENT_DAY}",
         "enriched_authors_table": f"enriched_grants_authors_{CURRENT_DAY}",
-        "person_ref_column": "person_uuid",  # TODO(user): confirm — only used if the author table has no "email" column directly
+        "main_column_renames": {"sponser": "sponsor", "shortTitle": "contractid"},
+        "author_column_renames": {"internal_flag": "internal"},
     },
     "research_output": {
         "base_main_table": "processed_researchoutputs_20260723",
         "base_author_table": "processed_author_20260723",
         "enriched_main_table": f"enriched_research_output_{CURRENT_DAY}",
         "enriched_authors_table": f"enriched_research_output_authors_{CURRENT_DAY}",
-        "person_ref_column": "person_uuid",  # TODO(user): confirm — only used if the author table has no "email" column directly
+        "main_column_renames": {},
+        "author_column_renames": {},
     },
 }
 
@@ -142,30 +155,53 @@ def log_column_diff(label: str, base_df: pd.DataFrame, existing_df: pd.DataFrame
         )
 
 
-def normalize_base_authors(authors_df: pd.DataFrame, person_ref_column: str) -> pd.DataFrame:
+def _stringify_primary_id(value) -> str:
     """
-    Resolves faculty_id on the base snapshot's author table. Tries a direct
-    `email` column first; falls back to joining `person_ref_column` against
-    `sync_persons` (same Pure uuids regardless of which pipeline synced
-    them) if there's no `email` column. Raises loudly if neither is
-    available — see module docstring, this needs confirming before
-    trusting it silently.
+    primary_id values look numeric (5903, 10003, ...) on both sides of the
+    join — cast to string consistently so an int64 vs string dtype mismatch
+    doesn't silently fail every match. Nulls stay null (never becomes the
+    literal string "nan"/"None", which could accidentally collide with a
+    stray value on the other side).
+    """
+    if pd.isna(value):
+        return None
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def normalize_base_authors(authors_df: pd.DataFrame, author_column_renames: dict) -> pd.DataFrame:
+    """
+    Resolves faculty_id on the base snapshot's author table. Confirmed
+    2026-07-23: these tables have neither `email` nor `person_uuid` — only
+    `primary_id` (Pure's own "PrimaryId" identifier, the same thing
+    `sync_persons.primary_id` already holds — see module docstring). Joins
+    on that (string-normalized) to pick up email, then resolves
+    faculty_id. Also adds `sort_order` if the table doesn't have one
+    (Grants' author table doesn't).
     """
     if authors_df.empty:
         return authors_df
 
-    df = authors_df.copy()
+    df = authors_df.rename(columns=author_column_renames).copy()
+
+    if "sort_order" not in df.columns:
+        df["sort_order"] = df.groupby("uuid").cumcount() + 1
+
     if "email" in df.columns:
         logger.info("Author table has 'email' directly — using it.")
-    elif person_ref_column in df.columns:
-        logger.info("No 'email' column — joining '%s' against %s.%s for email.", person_ref_column, DATABASE, PERSON_TABLE)
-        person_emails = persons_df[["uuid", "email"]].rename(columns={"uuid": person_ref_column})
-        df = df.merge(person_emails, how="left", on=person_ref_column)
+    elif "primary_id" in df.columns:
+        logger.info("No 'email' column — joining 'primary_id' against %s.%s for email.", DATABASE, PERSON_TABLE)
+        person_lookup = persons_df[["primary_id", "email"]].copy()
+        person_lookup["primary_id"] = person_lookup["primary_id"].apply(_stringify_primary_id)
+        person_lookup = person_lookup.dropna(subset=["primary_id"]).drop_duplicates(subset=["primary_id"])
+        df["primary_id"] = df["primary_id"].apply(_stringify_primary_id)
+        df = df.merge(person_lookup, how="left", on="primary_id")
     else:
         raise ValueError(
-            f"Base author table has neither 'email' nor '{person_ref_column}' — "
+            f"Base author table has none of 'email', 'primary_id' — "
             f"can't resolve faculty_id. Columns present: {list(df.columns)}. "
-            f"Run discover_initial_load_tables.py and fix person_ref_column in BASE_SNAPSHOTS."
+            f"Run discover_initial_load_tables.py again and adjust normalize_base_authors."
         )
 
     df["faculty_id"] = df["email"].map(
@@ -186,9 +222,9 @@ def merge_scope(scope_label: str, cfg: dict) -> None:
         logger.info("[%s] no base snapshot found — nothing to merge.", scope_label)
         return
 
+    base_main_df = base_main_df.rename(columns=cfg["main_column_renames"]).copy()
     log_column_diff(scope_label, base_main_df, existing_main_df)
 
-    base_main_df = base_main_df.copy()
     base_main_df["changeType"] = "CREATE"
 
     # Real enrich_changes.py output wins on any overlapping uuid (see
@@ -202,7 +238,7 @@ def merge_scope(scope_label: str, cfg: dict) -> None:
 
     merged_main_df = pd.concat([existing_main_df, base_main_df], ignore_index=True)
 
-    base_authors_df = normalize_base_authors(base_authors_df, cfg["person_ref_column"])
+    base_authors_df = normalize_base_authors(base_authors_df, cfg["author_column_renames"])
     if not base_authors_df.empty:
         base_authors_df = base_authors_df[~base_authors_df["uuid"].isin(existing_uuids)]
     merged_authors_df = pd.concat([existing_authors_df, base_authors_df], ignore_index=True)
