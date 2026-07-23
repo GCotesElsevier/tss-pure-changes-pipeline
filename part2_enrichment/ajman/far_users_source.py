@@ -5,8 +5,10 @@
 # MAGIC from, controlled by `config.py`'s `FAR_USERS_SOURCE`:
 # MAGIC - `"csv_bypass"` (current, 2026-07-23): Ajman's Faculty180 API access
 # MAGIC   isn't provisioned yet, so this reads a one-time CSV export the user
-# MAGIC   pulled directly from Faculty180 (has `faculty_id` + `email` columns
-# MAGIC   among others — only those two are used here).
+# MAGIC   pulled directly from Faculty180 (has `facultyid` + `email` columns
+# MAGIC   among others — only those two are used here; `facultyid` is
+# MAGIC   renamed to `faculty_id` right after reading, so the rest of this
+# MAGIC   function doesn't need to know about the CSV's own naming).
 # MAGIC - `"api"`: calls the real `FARUsersClient.fetch_all_users()`, same as
 # MAGIC   HBKU already does.
 # MAGIC
@@ -24,6 +26,12 @@ def get_email_to_faculty_id(spark, logger) -> dict:
     if FAR_USERS_SOURCE == "csv_bypass":
         logger.info("FAR API not yet provisioned for Ajman — reading email -> faculty_id from CSV bypass: %s", FAR_USERS_CSV_PATH)
         df = spark.read.option("header", True).csv(FAR_USERS_CSV_PATH).toPandas()
+
+        # The CSV export names this column "facultyid" (no underscore) --
+        # normalize to "faculty_id" here so nothing downstream needs to
+        # know about the CSV's own naming.
+        if "facultyid" in df.columns and "faculty_id" not in df.columns:
+            df = df.rename(columns={"facultyid": "faculty_id"})
 
         missing = {"email", "faculty_id"} - set(df.columns)
         if missing:
