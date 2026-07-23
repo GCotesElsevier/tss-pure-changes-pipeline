@@ -29,11 +29,12 @@ DATABASE = "academicinformationsystems_technicalservices.ajman"
 
 # Prefixed `sync_` so these never collide with ip-pure2far-integration's own
 # un-prefixed entity tables living in the same catalog — see
-# entity_sync.py's module docstring.
+# entity_sync.py's module docstring. No sync_internal_organizations for
+# Ajman — it only ever fed Custom Sections' org name resolution, which is
+# out of scope for this client.
 PERSON_TABLE = "sync_persons"
 EVENT_TABLE = "sync_events"
 PUBLISHER_TABLE = "sync_publishers"
-INTERNAL_ORG_TABLE = "sync_internal_organizations"
 EXTERNAL_ORG_TABLE = "sync_external_organizations"
 
 # Only used the very first time an entity is synced (a missing table always
