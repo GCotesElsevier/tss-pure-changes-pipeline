@@ -489,11 +489,21 @@ summary_rows = []
 
 for scope, (main_table, deletes_table) in scope_tables.items():
     try:
-        main_df = spark.table(f"{DATABASE}.{main_table}_{CURRENT_DAY}").select("subtype", "changeType").toPandas()
-        if scope == "scholarly_activities":
-            main_df["type"] = main_df["subtype"].map(scholarly_cfg["subtype_to_type"])
+        if scope == "grants":
+            # enriched_grants_<date> has no "subtype" column at all -- Grants
+            # only ever has one FAR type ("Award", see grants_cfg["types"]),
+            # so there's nothing to read/map. Selecting "subtype" here (as
+            # every other scope does) raised an AnalysisException that the
+            # broad except below swallowed silently -- Grants never showed
+            # up in the summary at all until this was noticed 2026-07-24.
+            main_df = spark.table(f"{DATABASE}.{main_table}_{CURRENT_DAY}").select("changeType").toPandas()
+            main_df["type"] = "Award"
         else:
-            main_df["type"] = main_df["subtype"]  # Grants/Custom Sections: no further homologation needed
+            main_df = spark.table(f"{DATABASE}.{main_table}_{CURRENT_DAY}").select("subtype", "changeType").toPandas()
+            if scope == "scholarly_activities":
+                main_df["type"] = main_df["subtype"].map(scholarly_cfg["subtype_to_type"])
+            else:
+                main_df["type"] = main_df["subtype"]  # Custom Sections: no further homologation needed
         counts = main_df.groupby(["type", "changeType"]).size().reset_index(name="count")
         for _, row in counts.iterrows():
             summary_rows.append({
