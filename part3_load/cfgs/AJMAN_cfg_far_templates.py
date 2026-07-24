@@ -9,9 +9,12 @@
 # MAGIC so they're expected to apply as-is (per the onboarding checklist
 # MAGIC assumption B).
 # MAGIC
-# MAGIC `sftp_folder` values are PLACEHOLDERS (`ajman_pure2far_*`, not copied
-# MAGIC from HBKU's `pure2far_*`) — TODO(user): confirm Ajman's real SFTP
-# MAGIC folder naming convention before this is used for an actual upload.
+# MAGIC `sftp_folder` values confirmed with the user 2026-07-24: same naming
+# MAGIC convention as HBKU (`pure2far_scholarly`/`pure2far_grants`, no
+# MAGIC `ajman_` prefix needed) — the client separation already comes from
+# MAGIC `SFTP_BASE` (`/ajman/incoming/pure2far/ajman_prod` vs HBKU's
+# MAGIC `/hbku/incoming/pure2far/hbku_dev`), so the folder names themselves
+# MAGIC don't need to repeat it.
 
 # COMMAND ----------
 
@@ -36,12 +39,10 @@ FAR_TEMPLATES_CONFIG = {
             "Short survey": "Other",
         },
         "types": ["Book", "Chapter", "Journal", "Proceeding", "Patent", "Other", "Editorial"],
-        # TODO(user): confirm real SFTP folder name for Ajman.
-        "sftp_folder": "ajman_pure2far_scholarly",
+        "sftp_folder": "pure2far_scholarly",
     },
     "Grants": {
         "types": ["Award"],
-        # TODO(user): confirm real SFTP folder name for Ajman.
-        "sftp_folder": "ajman_pure2far_grants",
+        "sftp_folder": "pure2far_grants",
     },
 }

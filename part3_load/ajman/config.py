@@ -14,9 +14,11 @@ YEAR = date_object.strftime("%Y")
 MONTH = date_object.strftime("%m")
 DAY = date_object.strftime("%d")
 
-# TODO(user): confirm Ajman's real SFTP base path and secret scope before
-# running anything that imports this file — unlike HBKU (which reused
-# tss-dedup's already-existing path/scope for the same server), Ajman is a
-# brand-new client with no prior SFTP delivery to inherit from.
-SFTP_BASE = "REPLACE_ME_AJMAN_SFTP_BASE_PATH"
+# Confirmed with the user 2026-07-24: same SFTP server/credentials as
+# HBKU (same SFTP_SECRET_SCOPE), just a different base path. Only
+# `/ajman` existed (empty) at the time this was confirmed — the
+# `new`/`updates`/`deletes` subfolders per scope get created automatically
+# by sftp_utils.py's `_ensure_remote_dir` on first upload, same as HBKU's
+# own folders were originally created.
+SFTP_BASE = "/ajman/incoming/pure2far/ajman_prod"
 SFTP_SECRET_SCOPE = "sftp_scope"
