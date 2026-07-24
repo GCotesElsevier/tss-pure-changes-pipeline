@@ -12,6 +12,14 @@
 # MAGIC `part2_enrichment/`) — Part 1's `fetch_changes.py` still uses its own
 # MAGIC simpler `.astype(str)` approach, not this function, as a separate
 # MAGIC follow-up.
+# MAGIC
+# MAGIC **Real bug fixed 2026-07-24** (see `part2_enrichment/spark_utils.py`'s
+# MAGIC docstring for the full story): all three stringify passes checked
+# MAGIC `x is not None`, but a missing pandas value is almost always
+# MAGIC `float('nan')`, not `None` — so genuinely missing values got
+# MAGIC stringified to the literal text `"nan"` instead of staying a real
+# MAGIC SQL NULL. Replaced with `_is_missing(x)` (uses `pd.isna()`, guarded
+# MAGIC against lists/dicts) everywhere.
 
 # COMMAND ----------
 
@@ -21,18 +29,35 @@ from pyspark.sql.types import StringType, StructField, StructType
 
 # COMMAND ----------
 
+def _is_missing(x) -> bool:
+    """
+    True for None/NaN/NaT — anything pandas considers "no value". Guarded
+    against lists/dicts, which pd.isna() doesn't accept as a single scalar
+    (it either raises or returns an array instead of a bool for those).
+    """
+    if isinstance(x, (list, dict)):
+        return False
+    try:
+        return pd.isna(x)
+    except (TypeError, ValueError):
+        return False
+
+
 def safe_save_table(spark, logger, df, table_name: str) -> None:
     if isinstance(df, pd.DataFrame):
         is_empty = df.empty
         if not is_empty:
             df = df.copy()
 
-            # Pass 1: any object-dtype value that is not a list and not None
-            # becomes a string. Lists are left alone here — list-of-scalars
-            # columns are common and Spark infers those fine.
+            # Pass 1: any object-dtype value that is not a list and not
+            # missing becomes a string. Lists are left alone here —
+            # list-of-scalars columns are common and Spark infers those
+            # fine. Missing values are normalized to a real None (not just
+            # left as whatever flavor of "missing" they arrived as) so
+            # only one representation of "no value" flows downstream.
             for col in df.columns:
                 if df[col].dtype == object:
-                    df[col] = df[col].apply(lambda x: x if isinstance(x, (list, type(None))) else str(x))
+                    df[col] = df[col].apply(lambda x: x if isinstance(x, list) else (None if _is_missing(x) else str(x)))
 
             # Pass 2: a column is only left as-is if EVERY non-null value in
             # it is a list (a "pure" list column). Anything else (mixed
@@ -47,7 +72,7 @@ def safe_save_table(spark, logger, df, table_name: str) -> None:
                 elif sample.apply(lambda x: isinstance(x, list)).all():
                     pass
                 else:
-                    df[col] = df[col].apply(lambda x: str(x) if x is not None else None)
+                    df[col] = df[col].apply(lambda x: None if _is_missing(x) else str(x))
 
             # Final fallback: if createDataFrame still fails (e.g. a "pure"
             # list column holds lists of structurally different dicts row
@@ -60,7 +85,7 @@ def safe_save_table(spark, logger, df, table_name: str) -> None:
             except Exception as exc:
                 logger.warning("createDataFrame failed (%s), forcing all columns to string", exc)
                 for col in df.columns:
-                    df[col] = df[col].apply(lambda x: str(x) if x is not None else None)
+                    df[col] = df[col].apply(lambda x: None if _is_missing(x) else str(x))
                 explicit_schema = StructType([StructField(c, StringType(), True) for c in df.columns])
                 spark_df = spark.createDataFrame(df, schema=explicit_schema)
 
