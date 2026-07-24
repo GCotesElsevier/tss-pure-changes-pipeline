@@ -467,5 +467,11 @@ for scope, (main_table, deletes_table) in scope_tables.items():
 
 summary_df = pd.DataFrame(summary_rows).sort_values(["scope", "status", "subtype"]).reset_index(drop=True)
 summary_df = summary_df[["scope", "status", "subtype", "count"]]
-print(summary_df.to_string(index=False))
-print(f"\nTOTAL: {summary_df['count'].sum()}")
+
+# Printed per scope, each with its own subtotal -- a single combined
+# TOTAL across scopes (e.g. Grants + Scholarly Activities added together)
+# isn't a meaningful number on its own.
+for scope in summary_df["scope"].unique():
+    scope_df = summary_df[summary_df["scope"] == scope]
+    print(scope_df.to_string(index=False))
+    print(f"TOTAL ({scope}): {scope_df['count'].sum()}\n")
