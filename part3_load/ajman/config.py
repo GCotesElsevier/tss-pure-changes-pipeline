@@ -14,11 +14,14 @@ YEAR = date_object.strftime("%Y")
 MONTH = date_object.strftime("%m")
 DAY = date_object.strftime("%d")
 
-# Confirmed with the user 2026-07-24: same SFTP server/credentials as
-# HBKU (same SFTP_SECRET_SCOPE), just a different base path. Only
-# `/ajman` existed (empty) at the time this was confirmed — the
-# `new`/`updates`/`deletes` subfolders per scope get created automatically
-# by sftp_utils.py's `_ensure_remote_dir` on first upload, same as HBKU's
-# own folders were originally created.
-SFTP_BASE = "/ajman/incoming/pure2far/ajman_prod"
-SFTP_SECRET_SCOPE = "sftp_scope"
+# Corrected 2026-07-27: Ajman does NOT share a server with HBKU, even
+# though the credentials (username/private_key) are the same. HBKU is on
+# transfer.ops.interfolio.com (SFTP_SECRET_SCOPE "sftp_scope"); Ajman is
+# on transfer.eu1.interfolio.com, tracked in its own scope
+# "sftp_scope_ajman" (same username/private_key values copied over, only
+# `host` differs). The base path was also corrected: it's `ajman_dev`,
+# not `ajman_prod`. The `new`/`updates`/`deletes` subfolders per scope
+# get created automatically by sftp_utils.py's `_ensure_remote_dir` on
+# first upload, same as HBKU's own folders were originally created.
+SFTP_BASE = "/ajman/incoming/pure2far/ajman_dev"
+SFTP_SECRET_SCOPE = "sftp_scope_ajman"
