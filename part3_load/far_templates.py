@@ -266,6 +266,25 @@ class PureBaseTransformer:
         ).fillna("")
 
     @staticmethod
+    def _get_pages_col(df):
+        """
+        HBKU QA rule (2026-08-05): editors are expected to always fill
+        "Number of Pages" when it applies to a record and leave "Pages
+        (from-to)" blank, using "Pages (from-to)" only for records with no
+        page count -- so "Number of Pages" wins whenever a record has one,
+        regardless of subtype. Previously only Pure_Books_Transformer read
+        "numberOfPages" at all; every other type read "pages" only, silently
+        dropping the page count for records that followed this convention.
+        """
+        def clean(v):
+            s = str(v).strip()
+            return "" if s.lower() in ("", "nan", "none") else s
+
+        number_of_pages = PureBaseTransformer._get_col(df, "numberOfPages").map(clean)
+        pages = PureBaseTransformer._get_col(df, "pages").map(clean)
+        return number_of_pages.where(number_of_pages != "", pages)
+
+    @staticmethod
     def _compose_event_location(city, country):
         parts = []
         if pd.notna(city) and str(city).strip() and str(city).strip().lower() != "nan":
@@ -358,7 +377,7 @@ class Pure_Chapter_Transformer(PureBaseTransformer):
             "Publisher": self._get_col(df, "publisher_name"),
             "Publisher City and State": self._get_col(df, "publisher_country"),
             "Edition": self._get_col(df, "edition"),
-            "Page Number": self._get_col(df, "pages"),
+            "Page Number": self._get_pages_col(df),
             "ISSN": self._get_col(df, "issn"),
             "DOI": self._get_col(df, "doi").apply(self._fmt_doi) if "doi" in df.columns else empty,
             "CoAuthor": df["uuid"].map(authors_map),
@@ -414,7 +433,7 @@ class Pure_Journal_Article_Transformer(PureBaseTransformer):
             "Publisher City and State": self._get_col(df, "publisher_country"),
             "Volume": self._get_col(df, "volume"),
             "Issue Number / Edition": self._get_col(df, "journalNumber"),
-            "Page Number": self._get_col(df, "pages"),
+            "Page Number": self._get_pages_col(df),
             "ISSN": self._get_col(df, "issn"),
             "DOI": self._get_col(df, "doi").apply(self._fmt_doi) if "doi" in df.columns else empty,
             "CoAuthor": df["uuid"].map(authors_map),
@@ -465,7 +484,7 @@ class Pure_Conference_Transformer(PureBaseTransformer):
             "Publisher City and State": self._get_col(df, "publisher_country"),
             "Volume": self._get_col(df, "volume"),
             "Issue Number / Edition": self._get_col(df, "journalNumber"),
-            "Page Number": self._get_col(df, "pages"),
+            "Page Number": self._get_pages_col(df),
             "DOI": self._get_col(df, "doi").apply(self._fmt_doi) if "doi" in df.columns else empty,
             "CoAuthor": df["uuid"].map(authors_map),
             "CoEditor": self._get_col(df, "hostPublicationEditors"),
@@ -512,7 +531,7 @@ class Pure_Other_Transformer(PureBaseTransformer):
             "Publisher City and State": self._get_col(df, "publisher_country"),
             "Volume": self._get_col(df, "volume"),
             "Issue Number / Edition": self._get_col(df, "journalNumber"),
-            "Page Number": self._get_col(df, "pages"),
+            "Page Number": self._get_pages_col(df),
             "ISSN": self._get_col(df, "issn"),
             "Co-Contributor": df["uuid"].map(authors_map),
             "URL": self._get_col(df, "url"),
@@ -593,7 +612,7 @@ class Pure_Editorial_Transformer(PureBaseTransformer):
             "Title": self._get_col(df, "title"),
             "Year": self._get_col(df, "statusYear"),
             "Journal": self._get_col(df, "journal_title"),
-            "Page Numbers": self._get_col(df, "pages"),
+            "Page Numbers": self._get_pages_col(df),
             "Publisher": self._get_col(df, "publisher_name"),
             "URL": self._get_col(df, "url"),
             "Description": self._get_col(df, "abstract"),

@@ -327,7 +327,7 @@ for type_name in scholarly_cfg["types"]:
         continue
 
     df_template["Publication Status"] = "Completed/Published"
-    df_template["Review"] = "To be Reviewed"
+    df_template["Review"] = "To be Reviewed - Ch"
     df_template = normalize_columns(df_template).drop_duplicates()
 
     suffix = type_table_suffix(type_name)
@@ -386,7 +386,7 @@ for type_name in grants_cfg["types"]:  # just ["Award"] -- Pure's own Project/Aw
 
     # Ported as-is: the original also drops this column before saving/upload.
     df_template = df_template.drop(columns=["Co-Investigator(s)"], errors="ignore")
-    df_template["Review"] = "To be Reviewed"
+    df_template["Review"] = "To be Reviewed - Ch"
     df_template = normalize_columns(df_template).drop_duplicates()
 
     suffix = type_table_suffix(type_name)
@@ -447,7 +447,7 @@ for type_name in custom_cfg["types"]:
         logger.info("[custom_sections] no records for type %s today.", type_name)
         continue
 
-    df_template["Review"] = "To be Reviewed"
+    df_template["Review"] = "To be Reviewed - Ch"
     df_template = normalize_columns(df_template).drop_duplicates()
 
     suffix = type_table_suffix(type_name, type_slug_map)
