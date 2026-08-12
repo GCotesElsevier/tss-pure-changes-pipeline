@@ -15,9 +15,14 @@ CURRENT_DAY = INGEST_TS.strftime("%Y%m%d")
 # "YYYY-MM-DD"). Every run after that resumes from the persisted token
 # instead of this date — see sync_state.py.
 #
-# 2026-07-01 is the day after the last confirmed fully-current state across
-# all 3 scopes: Scholarly Activities (research outputs) last ran through
-# 2026-06-30, and Grants / Custom Sections last ran on 2026-06-22 but had no
-# new changes when checked again on 2026-06-30 — so all 3 scopes were already
-# current as of 2026-06-30.
-DEFAULT_SINCE_DATE = "2026-07-01"
+# 2026-08-12 is the day after tss-dedup's full load + initial sync between
+# Pure and FAR completed for all 3 scopes (2026-08-11: Grants at ~19:00 UTC,
+# Scholarly Activities/Custom Sections at ~19:25-20:24 UTC), which is also
+# when this table's resumptionToken was reset via reset_sync_state.py — this
+# date only matters if that control table is ever dropped again. Starting
+# from 2026-08-12 rather than 2026-08-11 is deliberate: the changes endpoint
+# only accepts day granularity, not time-of-day, so 2026-08-11 would re-pull
+# the same evening's events the full load already covered — that leaves an
+# uncaptured gap between ~20:24 UTC on 2026-08-11 and midnight, accepted as
+# the one-time cost of this cutover.
+DEFAULT_SINCE_DATE = "2026-08-12"
