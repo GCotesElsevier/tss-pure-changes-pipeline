@@ -99,6 +99,10 @@ for scope_name in cfg.keys():
 
     scope_df = changes_df[changes_df["scope"] == scope_name] if not changes_df.empty else changes_df
 
+    allowed_types = cfg[scope_name].get("change_types")
+    if allowed_types is not None and not scope_df.empty:
+        scope_df = scope_df[scope_df["changeType"].isin(allowed_types)]
+
     if not scope_df.empty:
         spark_df = spark.createDataFrame(scope_df.drop(columns=["scope"]).astype(str))
         spark_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
