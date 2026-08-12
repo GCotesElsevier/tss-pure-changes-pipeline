@@ -12,7 +12,7 @@
 # COMMAND ----------
 
 CHANGES_CONFIG = {
-    "Scholarly Activities": {"pure_families": ["ResearchOutput"]},
-    "Grants": {"pure_families": ["Award", "Project"]},
-    "Custom Sections": {"pure_families": ["Activity"]},
+    "Scholarly Activities": {"pure_families": ["ResearchOutput"], "change_types": ["DELETE"]},
+    "Grants": {"pure_families": ["Award", "Project"], "change_types": ["CREATE", "UPDATE", "DELETE"]},
+    "Custom Sections": {"pure_families": ["Activity"], "change_types": ["DELETE"]},
 }
