@@ -43,6 +43,42 @@
 # MAGIC `pd.isna()` (catches `None`, `float('nan')`, and `NaT` alike) and is
 # MAGIC guarded against lists/dicts, which `pd.isna()` doesn't accept as a
 # MAGIC single scalar.
+# MAGIC
+# MAGIC **Real bug fixed 2026-08-13:** a second, distinct missing-value bug —
+# MAGIC `_is_missing(x)` correctly returned `True` for a missing cell and
+# MAGIC Pass 1/2 correctly reassigned it to Python `None`, but on this
+# MAGIC cluster's pandas version (3.0.5, `future.infer_string` on by
+# MAGIC default) a plain string column built by `pd.DataFrame(list_of_dicts)`
+# MAGIC is NOT legacy `object` dtype — it's pandas' newer Arrow-backed
+# MAGIC `string`/`str` dtype (`pandas.arrays.ArrowStringArray`). Pass 1's
+# MAGIC trigger check was `df[col].dtype == object`, which is `False` for
+# MAGIC that dtype, so Pass 1 silently skipped every such column entirely.
+# MAGIC Pass 2 did reach it and reassigned `None` for missing cells — but
+# MAGIC `df[col] = df[col].apply(...)` on a DataFrame with `future.infer_string`
+# MAGIC enabled gets silently re-inferred right back into an
+# MAGIC ArrowStringArray, which stores the `None` as its own NA sentinel
+# MAGIC instead of a plain Python `None`. `spark.createDataFrame(df)` (Arrow
+# MAGIC disabled on the Spark side — see `enrich_changes.py`'s Arrow-bug
+# MAGIC comment) doesn't unpack that sentinel as a real null through its
+# MAGIC legacy pandas conversion path; it surfaces as a raw NaN, which then
+# MAGIC renders as the literal string `"NaN"` (capitalized — this is Java's
+# MAGIC `Double.toString(NaN)`, not Python's `str()`, which is what gave this
+# MAGIC bug's output a different capitalization than the 2026-07-24 one and
+# MAGIC made the two easy to mistake for the same root cause). Confirmed via
+# MAGIC a real repro against this exact cluster (not just read from a
+# MAGIC production table) that this reproduces with ONLY a missing value in
+# MAGIC an otherwise-string column, no heterogeneous list/dict shapes
+# MAGIC required. Fixed by (a) widening Pass 1's trigger to
+# MAGIC `pd.api.types.is_string_dtype(df[col])`, which is `True` for both
+# MAGIC legacy `object` dtype (unchanged behavior) and the new `string`/`str`
+# MAGIC dtype, and (b) appending `.astype(object)` after every Pass 1/2/
+# MAGIC fallback reassignment, which pins the result to a plain numpy object
+# MAGIC array so pandas can't re-infer it back into an Arrow-backed
+# MAGIC extension array and lose the real `None`. Numeric (float64-with-NaN)
+# MAGIC columns were NOT affected by this bug — a native numpy float64 array
+# MAGIC converts its NaN to a real Spark SQL NULL correctly through the same
+# MAGIC legacy conversion path; only the Arrow-backed string extension array
+# MAGIC has this gap.
 
 # COMMAND ----------
 
@@ -72,15 +108,23 @@ def safe_save_table(spark, logger, df, table_name: str) -> None:
         if not is_empty:
             df = df.copy()
 
-            # Pass 1: any object-dtype value that is not a list and not
+            # Pass 1: any string-dtype value that is not a list and not
             # missing becomes a string. Lists are left alone here —
             # list-of-scalars columns are common and Spark infers those
             # fine. Missing values are normalized to a real None (not just
             # left as whatever flavor of "missing" they arrived as) so
             # only one representation of "no value" flows downstream.
+            # `is_string_dtype` (not `== object`) so this also catches
+            # pandas' Arrow-backed `string`/`str` dtype, not just legacy
+            # `object` — see the "Real bug fixed 2026-08-13" note above.
+            # `.astype(object)` pins the result to a plain numpy object
+            # array so pandas can't silently re-infer it back into that
+            # Arrow-backed dtype and lose the real None.
             for col in df.columns:
-                if df[col].dtype == object:
-                    df[col] = df[col].apply(lambda x: x if isinstance(x, list) else (None if _is_missing(x) else str(x)))
+                if pd.api.types.is_string_dtype(df[col]):
+                    df[col] = df[col].apply(
+                        lambda x: x if isinstance(x, list) else (None if _is_missing(x) else str(x))
+                    ).astype(object)
 
             # Pass 2: a column is only left as-is if EVERY non-null value in
             # it is a list (a "pure" list column). Anything else (mixed
@@ -95,7 +139,7 @@ def safe_save_table(spark, logger, df, table_name: str) -> None:
                 elif sample.apply(lambda x: isinstance(x, list)).all():
                     pass
                 else:
-                    df[col] = df[col].apply(lambda x: None if _is_missing(x) else str(x))
+                    df[col] = df[col].apply(lambda x: None if _is_missing(x) else str(x)).astype(object)
 
             # Final fallback: if createDataFrame still fails (e.g. a "pure"
             # list column holds lists of structurally different dicts row
@@ -108,7 +152,7 @@ def safe_save_table(spark, logger, df, table_name: str) -> None:
             except Exception as exc:
                 logger.warning("createDataFrame failed (%s), forcing all columns to string", exc)
                 for col in df.columns:
-                    df[col] = df[col].apply(lambda x: None if _is_missing(x) else str(x))
+                    df[col] = df[col].apply(lambda x: None if _is_missing(x) else str(x)).astype(object)
                 explicit_schema = StructType([StructField(c, StringType(), True) for c in df.columns])
                 spark_df = spark.createDataFrame(df, schema=explicit_schema)
 
