@@ -1,12 +1,15 @@
 # Databricks notebook source
 # MAGIC %md
 # MAGIC # Part 1 — Fetch Pure Changes
-# MAGIC Pulls change events (`CREATE` / `UPDATE` / `DELETE`) for **every
-# MAGIC scope** in a single run — one pass over Pure's changes stream, split
-# MAGIC by scope afterwards — and saves the result for Part 2 (enrichment) to
-# MAGIC pick up. There is no per-scope widget: each pipeline run is expected
-# MAGIC to process new records, updates, and deletes for all scopes and
-# MAGIC subtypes together.
+# MAGIC Pulls change events (`CREATE` / `UPDATE` / `DELETE`) for one scope at a
+# MAGIC time — Research Outputs (Scholarly Activities), Custom Sections and
+# MAGIC Grants each run their own full pass over Pure's changes stream, with
+# MAGIC their own resumption token (see `SYNC_STATE_TABLES` /
+# MAGIC `DEFAULT_SINCE_DATES` in `config.py`), so each can run as its own
+# MAGIC independent recurring Databricks job. Same `SCOPE` widget pattern as
+# MAGIC `part1_changes/ajman/fetch_changes.py`. The `change_types` allow-list
+# MAGIC per scope (see `cfgs/HBKU_cfg_changes.py`) is unchanged — it still
+# MAGIC filters within whichever scope's pass is currently running.
 
 # COMMAND ----------
 
@@ -54,66 +57,62 @@ logger.propagate = False
 # COMMAND ----------
 
 cfg = CHANGES_CONFIG
-
-# Union of every family we care about, plus the reverse lookup used to tag
-# each event with its scope after the single fetch below.
-family_to_scope = {}
-for scope_name, scope_cfg in cfg.items():
-    for family in scope_cfg["pure_families"]:
-        family_to_scope[family] = scope_name
-
-target_families = list(family_to_scope.keys())
-logger.info("Scopes: %s", list(cfg.keys()))
-logger.info("Pure families tracked: %s", target_families)
-
-# COMMAND ----------
-
-start_token = get_last_resumption_token(spark, DATABASE, SYNC_STATE_TABLE, DEFAULT_SINCE_DATE)
-logger.info("Starting from: %s", start_token)
-
 client = PureChangesClient(base_url=LEGACY_URL, api_key=LEGACY_API_KEY)
-raw_events, next_token = client.fetch_changes(start_token_or_date=start_token, families=target_families)
-
-logger.info("Total raw change events across all scopes: %d", len(raw_events))
-logger.info("Next resumption token: %s", next_token)
+logger.info("Scopes: %s", list(cfg.keys()))
 
 # COMMAND ----------
 
-deduped_events = dedupe_last_event_per_uuid(raw_events)
-logger.info("Total unique records after de-duplication: %d", len(deduped_events))
-
-changes_df = pd.DataFrame(deduped_events)
-if not changes_df.empty:
-    changes_df["scope"] = changes_df["familySystemName"].map(family_to_scope)
-    logger.info("\n%s", changes_df.groupby(["scope", "changeType"]).size().to_string())
-
-changes_df
+# Defaults to running all 3 scopes together, but can be narrowed to a single
+# scope — this is what lets Research Outputs, Custom Sections and Grants
+# run as independent recurring Databricks jobs. Same pattern as
+# part1_changes/ajman/fetch_changes.py.
+dbutils.widgets.text("SCOPE", "ALL", "Scope to run (or ALL)")
+scope_widget = dbutils.widgets.get("SCOPE")
+scopes_to_run = cfg if scope_widget == "ALL" else {scope_widget: cfg[scope_widget]}
 
 # COMMAND ----------
 
-# NOTE: destination table name/schema is provisional — to be finalized
-# together with Part 2, which is what actually consumes this output.
-for scope_name in cfg.keys():
+for scope_name, scope_cfg in scopes_to_run.items():
+    families = scope_cfg["pure_families"]
+    sync_state_table = SYNC_STATE_TABLES[scope_name]
+    default_since_date = DEFAULT_SINCE_DATES[scope_name]
+
+    logger.info("=== %s (families: %s) ===", scope_name, families)
+
+    start_token = get_last_resumption_token(spark, DATABASE, sync_state_table, default_since_date)
+    logger.info("Starting from: %s", start_token)
+
+    raw_events, next_token = client.fetch_changes(start_token_or_date=start_token, families=families)
+    logger.info("Raw change events: %d", len(raw_events))
+    logger.info("Next resumption token: %s", next_token)
+
+    deduped_events = dedupe_last_event_per_uuid(raw_events)
+    logger.info("Unique records after de-duplication: %d", len(deduped_events))
+
+    changes_df = pd.DataFrame(deduped_events)
+    if not changes_df.empty:
+        logger.info("\n%s", changes_df.groupby("changeType").size().to_string())
+
+    # change_types allow-list per scope, unchanged from before this
+    # per-scope restructure (see cfgs/HBKU_cfg_changes.py): Scholarly
+    # Activities/Custom Sections only keep DELETE (new records come via
+    # tss-dedup), Grants keeps CREATE+UPDATE+DELETE.
+    allowed_types = scope_cfg.get("change_types")
+    if allowed_types is not None and not changes_df.empty:
+        changes_df = changes_df[changes_df["changeType"].isin(allowed_types)]
+
     scope_slug = scope_name.lower().replace(" ", "_").replace(":", "")
     output_table = f"{DATABASE}.changes_{scope_slug}_{CURRENT_DAY}"
 
-    scope_df = changes_df[changes_df["scope"] == scope_name] if not changes_df.empty else changes_df
-
-    allowed_types = cfg[scope_name].get("change_types")
-    if allowed_types is not None and not scope_df.empty:
-        scope_df = scope_df[scope_df["changeType"].isin(allowed_types)]
-
-    if not scope_df.empty:
-        spark_df = spark.createDataFrame(scope_df.drop(columns=["scope"]).astype(str))
+    if not changes_df.empty:
+        spark_df = spark.createDataFrame(changes_df.astype(str))
         spark_df.write.mode("overwrite").option("overwriteSchema", "true").saveAsTable(output_table)
         logger.info("Saved %d records to %s", spark_df.count(), output_table)
     else:
         logger.info("No change events for scope %s — nothing saved.", scope_name)
 
-# COMMAND ----------
-
-# Only advance the token after every scope's output has been saved
-# successfully, so a failed run resumes from the same place next time
-# instead of silently skipping events.
-save_resumption_token(spark, DATABASE, SYNC_STATE_TABLE, next_token)
-logger.info("Persisted resumption token for the next run: %s", next_token)
+    # Only advance THIS scope's token after its own output has been saved
+    # successfully — a failed run for one scope must not affect the other
+    # scopes' tokens, and must not skip this scope's events on retry.
+    save_resumption_token(spark, DATABASE, sync_state_table, next_token)
+    logger.info("Persisted resumption token for %s: %s", scope_name, next_token)
