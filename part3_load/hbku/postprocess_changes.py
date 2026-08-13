@@ -371,8 +371,6 @@ if run_scholarly_activities:
             type_name, len(df_template), len(collaborators_df),
         )
 
-# COMMAND ----------
-
     scholarly_deletes_df = build_deletes_export(read_enriched_table(f"enriched_research_output_deletes_{CURRENT_DAY}"))
     if not scholarly_deletes_df.empty:
         remote_path = upload_df_to_sftp(
@@ -433,8 +431,6 @@ if run_grants:
             type_name, len(df_template), len(collaborators_df),
         )
 
-# COMMAND ----------
-
     grants_deletes_df = build_deletes_export(read_enriched_table(f"enriched_grants_deletes_{CURRENT_DAY}"))
     if not grants_deletes_df.empty:
         remote_path = upload_df_to_sftp(
@@ -488,8 +484,6 @@ if run_custom_sections:
         # No collaborator file for Custom Sections -- same as the original
         # (it has no author data at all, internal or external).
         logger.info("[custom_sections] %s: %d rows exported", type_name, len(df_template))
-
-# COMMAND ----------
 
     custom_sections_deletes_df = build_deletes_export(read_enriched_table(f"enriched_custom_sections_deletes_{CURRENT_DAY}"))
     if not custom_sections_deletes_df.empty:
