@@ -8,6 +8,14 @@
 # MAGIC matching `far_templates.py` transformer to produce Faculty180's
 # MAGIC upload column shape.
 # MAGIC
+# MAGIC Same `SCOPE` widget as Part 1/Part 2, guarding each of the 3
+# MAGIC sequential scope sections below (not a generic loop — same reasoning
+# MAGIC as `enrich_changes.py`). The final cross-scope summary at the bottom
+# MAGIC is left unguarded: it already tolerates a missing table for any scope
+# MAGIC (silent skip, same as when a scope simply had no changes today), so a
+# MAGIC single-scope run just prints an empty/partial summary for the other
+# MAGIC 2 scopes instead of a wrong one.
+# MAGIC
 # MAGIC **Why this is simpler than `tss-dedup`'s `Step3_Postprocessor`:**
 # MAGIC that notebook's `unmatched_full_{type}` join and
 # MAGIC `explode_by_internal_authors` step exist because `tss-dedup` has a
@@ -81,6 +89,17 @@ handler = logging.StreamHandler(sys.stdout)
 handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 logger.addHandler(handler)
 logger.propagate = False
+
+# COMMAND ----------
+
+# Same SCOPE widget/values as part1_changes/hbku/fetch_changes.py and
+# part2_enrichment/hbku/enrich_changes.py, so a single-scope Databricks job
+# can pass the same widget value to all 3 notebooks in the chain.
+dbutils.widgets.text("SCOPE", "ALL", "Scope to run (or ALL)")
+scope_widget = dbutils.widgets.get("SCOPE")
+run_scholarly_activities = scope_widget in ("ALL", "Scholarly Activities")
+run_custom_sections = scope_widget in ("ALL", "Custom Sections")
+run_grants = scope_widget in ("ALL", "Grants")
 
 # COMMAND ----------
 
@@ -308,60 +327,63 @@ def log_unmapped_subtypes(df: pd.DataFrame, subtype_column: str, known_types, sc
 
 # COMMAND ----------
 
-scholarly_cfg = FAR_TEMPLATES_CONFIG["Scholarly Activities"]
+if run_scholarly_activities:
+    scholarly_cfg = FAR_TEMPLATES_CONFIG["Scholarly Activities"]
 
-research_output_df = read_enriched_table(f"enriched_research_output_{CURRENT_DAY}")
-research_output_authors_df = read_enriched_table(f"enriched_research_output_authors_{CURRENT_DAY}")
+    research_output_df = read_enriched_table(f"enriched_research_output_{CURRENT_DAY}")
+    research_output_authors_df = read_enriched_table(f"enriched_research_output_authors_{CURRENT_DAY}")
 
-if not research_output_df.empty:
-    log_unmapped_subtypes(research_output_df, "subtype", scholarly_cfg["subtype_to_type"].keys(), "scholarly_activities")
-    research_output_df = research_output_df.assign(type=research_output_df["subtype"].map(scholarly_cfg["subtype_to_type"]))
+    if not research_output_df.empty:
+        log_unmapped_subtypes(research_output_df, "subtype", scholarly_cfg["subtype_to_type"].keys(), "scholarly_activities")
+        research_output_df = research_output_df.assign(type=research_output_df["subtype"].map(scholarly_cfg["subtype_to_type"]))
 
-for type_name in scholarly_cfg["types"]:
-    df_template = build_far_template(
-        research_output_df, type_name, TRANSFORMER_MAP[type_name],
-        authors_df=research_output_authors_df, subtype_filter_col="type",
-    )
-    if df_template.empty:
-        logger.info("[scholarly_activities] no records for type %s today.", type_name)
-        continue
+    for type_name in scholarly_cfg["types"]:
+        df_template = build_far_template(
+            research_output_df, type_name, TRANSFORMER_MAP[type_name],
+            authors_df=research_output_authors_df, subtype_filter_col="type",
+        )
+        if df_template.empty:
+            logger.info("[scholarly_activities] no records for type %s today.", type_name)
+            continue
 
-    df_template["Publication Status"] = "Completed/Published"
-    df_template["Review"] = "To be Reviewed - Ch"
-    df_template = normalize_columns(df_template).drop_duplicates()
+        df_template["Publication Status"] = "Completed/Published"
+        df_template["Review"] = "To be Reviewed - Ch"
+        df_template = normalize_columns(df_template).drop_duplicates()
 
-    suffix = type_table_suffix(type_name)
-    save_table(df_template, f"far_results_{suffix}_{CURRENT_DAY}")
-    save_table(df_template.sample(min(50, len(df_template))), f"far_sample_results_{suffix}_{CURRENT_DAY}")
+        suffix = type_table_suffix(type_name)
+        save_table(df_template, f"far_results_{suffix}_{CURRENT_DAY}")
+        save_table(df_template.sample(min(50, len(df_template))), f"far_sample_results_{suffix}_{CURRENT_DAY}")
 
-    collaborators_df = build_collaborators(research_output_authors_df, df_template)
-    save_table(collaborators_df, f"far_collaborators_{suffix}_{CURRENT_DAY}")
+        collaborators_df = build_collaborators(research_output_authors_df, df_template)
+        save_table(collaborators_df, f"far_collaborators_{suffix}_{CURRENT_DAY}")
 
-    upload_split_by_changetype(
-        df_template, scholarly_cfg["sftp_folder"],
-        lambda status_folder: f"Faculty180_{suffix}_{YEAR}-{MONTH}-{DAY}_01.csv",
-    )
-    upload_split_by_changetype(
-        collaborators_df, scholarly_cfg["sftp_folder"],
-        lambda status_folder: f"Faculty180_{suffix}_collaborator_{YEAR}-{MONTH}-{DAY}_01.csv",
-    )
+        upload_split_by_changetype(
+            df_template, scholarly_cfg["sftp_folder"],
+            lambda status_folder: f"Faculty180_{suffix}_{YEAR}-{MONTH}-{DAY}_01.csv",
+        )
+        upload_split_by_changetype(
+            collaborators_df, scholarly_cfg["sftp_folder"],
+            lambda status_folder: f"Faculty180_{suffix}_collaborator_{YEAR}-{MONTH}-{DAY}_01.csv",
+        )
 
-    logger.info(
-        "[scholarly_activities] %s: %d rows exported, %d collaborators",
-        type_name, len(df_template), len(collaborators_df),
-    )
+        logger.info(
+            "[scholarly_activities] %s: %d rows exported, %d collaborators",
+            type_name, len(df_template), len(collaborators_df),
+        )
 
 # COMMAND ----------
 
-scholarly_deletes_df = build_deletes_export(read_enriched_table(f"enriched_research_output_deletes_{CURRENT_DAY}"))
-if not scholarly_deletes_df.empty:
-    remote_path = upload_df_to_sftp(
-        csv_ready(scholarly_deletes_df), SFTP_BASE, scholarly_cfg["sftp_folder"], "deletes",
-        f"Faculty180_deletes_{YEAR}-{MONTH}-{DAY}_01.csv", logger, secret_scope=SFTP_SECRET_SCOPE,
-    )
-    logger.info("[scholarly_activities] uploaded %d deletes to %s", len(scholarly_deletes_df), remote_path)
+    scholarly_deletes_df = build_deletes_export(read_enriched_table(f"enriched_research_output_deletes_{CURRENT_DAY}"))
+    if not scholarly_deletes_df.empty:
+        remote_path = upload_df_to_sftp(
+            csv_ready(scholarly_deletes_df), SFTP_BASE, scholarly_cfg["sftp_folder"], "deletes",
+            f"Faculty180_deletes_{YEAR}-{MONTH}-{DAY}_01.csv", logger, secret_scope=SFTP_SECRET_SCOPE,
+        )
+        logger.info("[scholarly_activities] uploaded %d deletes to %s", len(scholarly_deletes_df), remote_path)
+    else:
+        logger.info("[scholarly_activities] no deletes to upload today.")
 else:
-    logger.info("[scholarly_activities] no deletes to upload today.")
+    logger.info("Skipping Scholarly Activities — SCOPE=%s", scope_widget)
 
 # COMMAND ----------
 
@@ -370,57 +392,60 @@ else:
 
 # COMMAND ----------
 
-grants_cfg = FAR_TEMPLATES_CONFIG["Grants"]
+if run_grants:
+    grants_cfg = FAR_TEMPLATES_CONFIG["Grants"]
 
-grants_df = read_enriched_table(f"enriched_grants_{CURRENT_DAY}")
-grants_authors_df = read_enriched_table(f"enriched_grants_authors_{CURRENT_DAY}")
+    grants_df = read_enriched_table(f"enriched_grants_{CURRENT_DAY}")
+    grants_authors_df = read_enriched_table(f"enriched_grants_authors_{CURRENT_DAY}")
 
-for type_name in grants_cfg["types"]:  # just ["Award"] -- Pure's own Project/Award split is not exposed to FAR
-    df_template = build_far_template(
-        grants_df, type_name, TRANSFORMER_MAP[type_name],
-        authors_df=grants_authors_df, subtype_filter_col=None,
-    )
-    if df_template.empty:
-        logger.info("[grants] no records for type %s today.", type_name)
-        continue
+    for type_name in grants_cfg["types"]:  # just ["Award"] -- Pure's own Project/Award split is not exposed to FAR
+        df_template = build_far_template(
+            grants_df, type_name, TRANSFORMER_MAP[type_name],
+            authors_df=grants_authors_df, subtype_filter_col=None,
+        )
+        if df_template.empty:
+            logger.info("[grants] no records for type %s today.", type_name)
+            continue
 
-    # Ported as-is: the original also drops this column before saving/upload.
-    df_template = df_template.drop(columns=["Co-Investigator(s)"], errors="ignore")
-    df_template["Review"] = "To be Reviewed - Ch"
-    df_template = normalize_columns(df_template).drop_duplicates()
+        # Ported as-is: the original also drops this column before saving/upload.
+        df_template = df_template.drop(columns=["Co-Investigator(s)"], errors="ignore")
+        df_template["Review"] = "To be Reviewed - Ch"
+        df_template = normalize_columns(df_template).drop_duplicates()
 
-    suffix = type_table_suffix(type_name)
-    save_table(df_template, f"far_results_{suffix}_{CURRENT_DAY}")
-    save_table(df_template.sample(min(50, len(df_template))), f"far_sample_results_{suffix}_{CURRENT_DAY}")
+        suffix = type_table_suffix(type_name)
+        save_table(df_template, f"far_results_{suffix}_{CURRENT_DAY}")
+        save_table(df_template.sample(min(50, len(df_template))), f"far_sample_results_{suffix}_{CURRENT_DAY}")
 
-    collaborators_df = build_collaborators(grants_authors_df, df_template)
-    save_table(collaborators_df, f"far_collaborators_{suffix}_{CURRENT_DAY}")
+        collaborators_df = build_collaborators(grants_authors_df, df_template)
+        save_table(collaborators_df, f"far_collaborators_{suffix}_{CURRENT_DAY}")
 
-    upload_split_by_changetype(
-        df_template, grants_cfg["sftp_folder"],
-        lambda status_folder: f"Faculty180_{suffix}_{YEAR}-{MONTH}-{DAY}_01.csv",
-    )
-    upload_split_by_changetype(
-        collaborators_df, grants_cfg["sftp_folder"],
-        lambda status_folder: f"Faculty180_{suffix}_collaborator_{YEAR}-{MONTH}-{DAY}_01.csv",
-    )
+        upload_split_by_changetype(
+            df_template, grants_cfg["sftp_folder"],
+            lambda status_folder: f"Faculty180_{suffix}_{YEAR}-{MONTH}-{DAY}_01.csv",
+        )
+        upload_split_by_changetype(
+            collaborators_df, grants_cfg["sftp_folder"],
+            lambda status_folder: f"Faculty180_{suffix}_collaborator_{YEAR}-{MONTH}-{DAY}_01.csv",
+        )
 
-    logger.info(
-        "[grants] %s: %d rows exported, %d collaborators",
-        type_name, len(df_template), len(collaborators_df),
-    )
+        logger.info(
+            "[grants] %s: %d rows exported, %d collaborators",
+            type_name, len(df_template), len(collaborators_df),
+        )
 
 # COMMAND ----------
 
-grants_deletes_df = build_deletes_export(read_enriched_table(f"enriched_grants_deletes_{CURRENT_DAY}"))
-if not grants_deletes_df.empty:
-    remote_path = upload_df_to_sftp(
-        csv_ready(grants_deletes_df), SFTP_BASE, grants_cfg["sftp_folder"], "deletes",
-        f"Faculty180_deletes_{YEAR}-{MONTH}-{DAY}_01.csv", logger, secret_scope=SFTP_SECRET_SCOPE,
-    )
-    logger.info("[grants] uploaded %d deletes to %s", len(grants_deletes_df), remote_path)
+    grants_deletes_df = build_deletes_export(read_enriched_table(f"enriched_grants_deletes_{CURRENT_DAY}"))
+    if not grants_deletes_df.empty:
+        remote_path = upload_df_to_sftp(
+            csv_ready(grants_deletes_df), SFTP_BASE, grants_cfg["sftp_folder"], "deletes",
+            f"Faculty180_deletes_{YEAR}-{MONTH}-{DAY}_01.csv", logger, secret_scope=SFTP_SECRET_SCOPE,
+        )
+        logger.info("[grants] uploaded %d deletes to %s", len(grants_deletes_df), remote_path)
+    else:
+        logger.info("[grants] no deletes to upload today.")
 else:
-    logger.info("[grants] no deletes to upload today.")
+    logger.info("Skipping Grants — SCOPE=%s", scope_widget)
 
 # COMMAND ----------
 
@@ -429,51 +454,54 @@ else:
 
 # COMMAND ----------
 
-custom_cfg = FAR_TEMPLATES_CONFIG["Custom Sections"]
-type_slug_map = custom_cfg["type_slug"]
+if run_custom_sections:
+    custom_cfg = FAR_TEMPLATES_CONFIG["Custom Sections"]
+    type_slug_map = custom_cfg["type_slug"]
 
-custom_sections_df = read_enriched_table(f"enriched_custom_sections_{CURRENT_DAY}")
-log_unmapped_subtypes(custom_sections_df, "subtype", custom_cfg["types"], "custom_sections")
+    custom_sections_df = read_enriched_table(f"enriched_custom_sections_{CURRENT_DAY}")
+    log_unmapped_subtypes(custom_sections_df, "subtype", custom_cfg["types"], "custom_sections")
 
-for type_name in custom_cfg["types"]:
-    # No authors_df: Part 2 already explodes participants in place, so
-    # build_far_template just filters custom_sections_df to internal rows
-    # directly instead of joining a separate authors table.
-    df_template = build_far_template(
-        custom_sections_df, type_name, TRANSFORMER_MAP[type_name],
-        authors_df=None, subtype_filter_col="subtype",
-    )
-    if df_template.empty:
-        logger.info("[custom_sections] no records for type %s today.", type_name)
-        continue
+    for type_name in custom_cfg["types"]:
+        # No authors_df: Part 2 already explodes participants in place, so
+        # build_far_template just filters custom_sections_df to internal rows
+        # directly instead of joining a separate authors table.
+        df_template = build_far_template(
+            custom_sections_df, type_name, TRANSFORMER_MAP[type_name],
+            authors_df=None, subtype_filter_col="subtype",
+        )
+        if df_template.empty:
+            logger.info("[custom_sections] no records for type %s today.", type_name)
+            continue
 
-    df_template["Review"] = "To be Reviewed - Ch"
-    df_template = normalize_columns(df_template).drop_duplicates()
+        df_template["Review"] = "To be Reviewed - Ch"
+        df_template = normalize_columns(df_template).drop_duplicates()
 
-    suffix = type_table_suffix(type_name, type_slug_map)
-    save_table(df_template, f"far_results_{suffix}_{CURRENT_DAY}")
-    save_table(df_template.sample(min(50, len(df_template))), f"far_sample_results_{suffix}_{CURRENT_DAY}")
+        suffix = type_table_suffix(type_name, type_slug_map)
+        save_table(df_template, f"far_results_{suffix}_{CURRENT_DAY}")
+        save_table(df_template.sample(min(50, len(df_template))), f"far_sample_results_{suffix}_{CURRENT_DAY}")
 
-    upload_split_by_changetype(
-        df_template, custom_cfg["sftp_folder"],
-        lambda status_folder: f"Faculty180_{suffix}_{YEAR}-{MONTH}-{DAY}_01.csv",
-    )
+        upload_split_by_changetype(
+            df_template, custom_cfg["sftp_folder"],
+            lambda status_folder: f"Faculty180_{suffix}_{YEAR}-{MONTH}-{DAY}_01.csv",
+        )
 
-    # No collaborator file for Custom Sections -- same as the original
-    # (it has no author data at all, internal or external).
-    logger.info("[custom_sections] %s: %d rows exported", type_name, len(df_template))
+        # No collaborator file for Custom Sections -- same as the original
+        # (it has no author data at all, internal or external).
+        logger.info("[custom_sections] %s: %d rows exported", type_name, len(df_template))
 
 # COMMAND ----------
 
-custom_sections_deletes_df = build_deletes_export(read_enriched_table(f"enriched_custom_sections_deletes_{CURRENT_DAY}"))
-if not custom_sections_deletes_df.empty:
-    remote_path = upload_df_to_sftp(
-        csv_ready(custom_sections_deletes_df), SFTP_BASE, custom_cfg["sftp_folder"], "deletes",
-        f"Faculty180_deletes_{YEAR}-{MONTH}-{DAY}_01.csv", logger, secret_scope=SFTP_SECRET_SCOPE,
-    )
-    logger.info("[custom_sections] uploaded %d deletes to %s", len(custom_sections_deletes_df), remote_path)
+    custom_sections_deletes_df = build_deletes_export(read_enriched_table(f"enriched_custom_sections_deletes_{CURRENT_DAY}"))
+    if not custom_sections_deletes_df.empty:
+        remote_path = upload_df_to_sftp(
+            csv_ready(custom_sections_deletes_df), SFTP_BASE, custom_cfg["sftp_folder"], "deletes",
+            f"Faculty180_deletes_{YEAR}-{MONTH}-{DAY}_01.csv", logger, secret_scope=SFTP_SECRET_SCOPE,
+        )
+        logger.info("[custom_sections] uploaded %d deletes to %s", len(custom_sections_deletes_df), remote_path)
+    else:
+        logger.info("[custom_sections] no deletes to upload today.")
 else:
-    logger.info("[custom_sections] no deletes to upload today.")
+    logger.info("Skipping Custom Sections — SCOPE=%s", scope_widget)
 
 # COMMAND ----------
 
