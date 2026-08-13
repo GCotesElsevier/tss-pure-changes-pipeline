@@ -7,6 +7,15 @@
 # MAGIC `fetch_changes.py` (same `CURRENT_DAY`, since both notebooks run in the
 # MAGIC same pipeline execution — no need to search for the "latest" table),
 # MAGIC then per non-DELETE record:
+# MAGIC
+# MAGIC Unlike Part 1 (`fetch_changes.py`), this is NOT a generic per-scope
+# MAGIC loop — each scope has its own processing function
+# MAGIC (`process_research_output`/`process_custom_sections`/`process_grants`)
+# MAGIC with a different shape, so the 3 scopes stay as 3 sequential blocks at
+# MAGIC the bottom of this notebook. The `SCOPE` widget (same values as Part 1's)
+# MAGIC just guards each block so this can run as part of a single-scope
+# MAGIC recurring job without redundantly re-processing the other 2 scopes'
+# MAGIC already-saved changes tables.
 # MAGIC 1. Fetches the full Pure record (Grants uses `grants_merge.py` to pair
 # MAGIC    a changed Project/Award with its counterpart).
 # MAGIC 2. Applies the scope's transform config
@@ -175,6 +184,21 @@ logger.info("Loaded %d FAR users for email -> faculty_id lookup", len(email_to_f
 # COMMAND ----------
 
 pure_api = PureAPI(base_url=API_URL, api_key=API_KEY)
+
+# COMMAND ----------
+
+# Same SCOPE widget/values as part1_changes/hbku/fetch_changes.py, so a
+# single-scope Databricks job can pass the same widget value to both
+# notebooks. Guards the 3 sequential blocks below instead of a generic loop
+# (see module docstring) — running 2+ of the 3 scopes' blocks the same day
+# is harmless on its own (each reads/writes its own dated tables) but wastes
+# Pure API calls, and running them concurrently in 2 separate jobs risks a
+# concurrent write conflict on the same Delta table.
+dbutils.widgets.text("SCOPE", "ALL", "Scope to run (or ALL)")
+scope_widget = dbutils.widgets.get("SCOPE")
+run_scholarly_activities = scope_widget in ("ALL", "Scholarly Activities")
+run_custom_sections = scope_widget in ("ALL", "Custom Sections")
+run_grants = scope_widget in ("ALL", "Grants")
 
 # COMMAND ----------
 
@@ -381,42 +405,51 @@ def process_grants(changes_rows: pd.DataFrame):
 
 # COMMAND ----------
 
-scholarly_changes = read_changes_table("scholarly_activities")
-scholarly_non_deletes, scholarly_deletes = split_deletes(scholarly_changes)
-logger.info(
-    "[scholarly_activities] %d to enrich, %d deletes", len(scholarly_non_deletes), len(scholarly_deletes)
-)
+if run_scholarly_activities:
+    scholarly_changes = read_changes_table("scholarly_activities")
+    scholarly_non_deletes, scholarly_deletes = split_deletes(scholarly_changes)
+    logger.info(
+        "[scholarly_activities] %d to enrich, %d deletes", len(scholarly_non_deletes), len(scholarly_deletes)
+    )
 
-research_output_df, research_output_authors_df = process_research_output(scholarly_non_deletes)
-research_output_deletes_df = build_deletes_table(scholarly_deletes, "scholarly_activities")
+    research_output_df, research_output_authors_df = process_research_output(scholarly_non_deletes)
+    research_output_deletes_df = build_deletes_table(scholarly_deletes, "scholarly_activities")
 
-save_table(research_output_df, f"enriched_research_output_{CURRENT_DAY}")
-save_table(research_output_authors_df, f"enriched_research_output_authors_{CURRENT_DAY}")
-save_table(research_output_deletes_df, f"enriched_research_output_deletes_{CURRENT_DAY}")
-
-# COMMAND ----------
-
-custom_sections_changes = read_changes_table("custom_sections")
-custom_sections_non_deletes, custom_sections_deletes = split_deletes(custom_sections_changes)
-logger.info(
-    "[custom_sections] %d to enrich, %d deletes", len(custom_sections_non_deletes), len(custom_sections_deletes)
-)
-
-custom_sections_df = process_custom_sections(custom_sections_non_deletes)
-custom_sections_deletes_df = build_deletes_table(custom_sections_deletes, "custom_sections")
-
-save_table(custom_sections_df, f"enriched_custom_sections_{CURRENT_DAY}")
-save_table(custom_sections_deletes_df, f"enriched_custom_sections_deletes_{CURRENT_DAY}")
+    save_table(research_output_df, f"enriched_research_output_{CURRENT_DAY}")
+    save_table(research_output_authors_df, f"enriched_research_output_authors_{CURRENT_DAY}")
+    save_table(research_output_deletes_df, f"enriched_research_output_deletes_{CURRENT_DAY}")
+else:
+    logger.info("Skipping Scholarly Activities — SCOPE=%s", scope_widget)
 
 # COMMAND ----------
 
-grants_changes = read_changes_table("grants")
-grants_non_deletes, grants_deletes = split_deletes(grants_changes)
-logger.info("[grants] %d to enrich, %d deletes", len(grants_non_deletes), len(grants_deletes))
+if run_custom_sections:
+    custom_sections_changes = read_changes_table("custom_sections")
+    custom_sections_non_deletes, custom_sections_deletes = split_deletes(custom_sections_changes)
+    logger.info(
+        "[custom_sections] %d to enrich, %d deletes", len(custom_sections_non_deletes), len(custom_sections_deletes)
+    )
 
-grants_df, grants_authors_df = process_grants(grants_non_deletes)
-grants_deletes_df = build_deletes_table(grants_deletes, "grants")
+    custom_sections_df = process_custom_sections(custom_sections_non_deletes)
+    custom_sections_deletes_df = build_deletes_table(custom_sections_deletes, "custom_sections")
 
-save_table(grants_df, f"enriched_grants_{CURRENT_DAY}")
-save_table(grants_authors_df, f"enriched_grants_authors_{CURRENT_DAY}")
-save_table(grants_deletes_df, f"enriched_grants_deletes_{CURRENT_DAY}")
+    save_table(custom_sections_df, f"enriched_custom_sections_{CURRENT_DAY}")
+    save_table(custom_sections_deletes_df, f"enriched_custom_sections_deletes_{CURRENT_DAY}")
+else:
+    logger.info("Skipping Custom Sections — SCOPE=%s", scope_widget)
+
+# COMMAND ----------
+
+if run_grants:
+    grants_changes = read_changes_table("grants")
+    grants_non_deletes, grants_deletes = split_deletes(grants_changes)
+    logger.info("[grants] %d to enrich, %d deletes", len(grants_non_deletes), len(grants_deletes))
+
+    grants_df, grants_authors_df = process_grants(grants_non_deletes)
+    grants_deletes_df = build_deletes_table(grants_deletes, "grants")
+
+    save_table(grants_df, f"enriched_grants_{CURRENT_DAY}")
+    save_table(grants_authors_df, f"enriched_grants_authors_{CURRENT_DAY}")
+    save_table(grants_deletes_df, f"enriched_grants_deletes_{CURRENT_DAY}")
+else:
+    logger.info("Skipping Grants — SCOPE=%s", scope_widget)
