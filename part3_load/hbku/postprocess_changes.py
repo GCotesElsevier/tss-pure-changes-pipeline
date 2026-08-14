@@ -697,3 +697,20 @@ if not grants_dropped_df.empty:
     print(f"\n{len(grants_dropped_df)} grant(s) silently dropped today (no internal author resolved):")
     print(grants_dropped_df.to_string(index=False))
 
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Client dashboard report
+# MAGIC Renders and uploads the Grants client-facing HTML report — see
+# MAGIC `dashboard_report.py` for the renderer itself. Run down here (not
+# MAGIC alongside the Grants section above) because it reads
+# MAGIC `dashboard_metrics_<CURRENT_DAY>` / `dashboard_grants_dropped_<CURRENT_DAY>`,
+# MAGIC which are only created by the "Dashboard metrics" section just above.
+# MAGIC Research Output / Custom Sections have no report yet — that's a
+# MAGIC separate future piece of work (combined dedup+changes report, reading
+# MAGIC `tss-dedup`'s `dashboard_run_summary`).
+
+# COMMAND ----------
+
+# MAGIC %run ./dashboard_report
+
