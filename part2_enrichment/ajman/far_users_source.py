@@ -46,7 +46,7 @@ def get_email_to_faculty_id(spark, logger) -> dict:
             if pd.notna(row["email"]) and pd.notna(row["faculty_id"])
         }
 
-    far_client = FARUsersClient(public_key=FAR_PUBLIC_KEY, private_key=FAR_PRIVATE_KEY, database=FAR_DATABASE)
+    far_client = FARUsersClient(public_key=FAR_PUBLIC_KEY, private_key=FAR_PRIVATE_KEY, database=FAR_DATABASE, url=FAR_URL)
     far_users = far_client.fetch_all_users()
     return {
         user["email"].strip().lower(): user["userid"]

@@ -39,6 +39,13 @@ else:
 # value.
 FAR_DATABASE = "ajman"
 
+# Confirmed (2026-08-14): the 403 wasn't FAR_DATABASE after all — Ajman is
+# hosted on Interfolio's EU region, same regional-host situation already
+# known from Ajman's SFTP server (transfer.eu1 vs transfer.ops for HBKU).
+# far_users_client.py's FARUsersClient defaults to the global host
+# (HBKU's), so Ajman must pass this explicitly.
+FAR_URL = "https://faculty180.eu1.interfolio.com/api.php"
+
 # Confirmed against ip-pure2far-integration/ajman_research_output/config.py
 # (that pipeline already ran successfully against real Ajman data) — NOT
 # "en_GB" like HBKU. This also required fixing every AJMAN_cfg_transform_*.py

@@ -27,11 +27,16 @@ import requests
 class FARUsersClient:
     """Client for FAR's (Interfolio Faculty180) `/users` endpoint."""
 
-    def __init__(self, public_key: str, private_key: str, database: str):
+    def __init__(self, public_key: str, private_key: str, database: str, url: str = "https://faculty180.interfolio.com/api.php"):
         self.public_key = public_key
         self.private_key = private_key
         self.database = database
-        self.url = "https://faculty180.interfolio.com/api.php"
+        # Default is the global host (HBKU's region) — Interfolio hosts some
+        # clients on regional subdomains instead (e.g. Ajman is EU-hosted:
+        # faculty180.eu1.interfolio.com), same regional-host situation
+        # already known from Ajman's SFTP server (transfer.eu1 vs transfer.ops
+        # for HBKU) — so this must be overridable per client, not hardcoded.
+        self.url = url
 
     def _get_headers(self, path: str) -> dict:
         method = "GET"
