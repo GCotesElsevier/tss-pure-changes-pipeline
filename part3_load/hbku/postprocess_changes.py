@@ -138,14 +138,17 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _is_internal(df: pd.DataFrame) -> pd.Series:
+    """`internal` arrives as a stringified '0'/'1' (see safe_save_table) -- coerced to numeric for the check."""
+    return pd.to_numeric(df["internal"], errors="coerce").fillna(0).astype(int) == 1
+
+
 def filter_to_internal_faculty(df: pd.DataFrame) -> pd.DataFrame:
     """Rows with a resolved internal faculty_id — the granularity Faculty180 needs."""
     if df.empty:
         return df
-    out = df.copy()
-    out["internal_num"] = pd.to_numeric(out["internal"], errors="coerce").fillna(0).astype(int)
-    mask = (out["internal_num"] == 1) & out["faculty_id"].notna() & (out["faculty_id"].astype(str).str.strip() != "")
-    return out[mask].drop(columns=["internal_num"])
+    mask = _is_internal(df) & df["faculty_id"].notna() & (df["faculty_id"].astype(str).str.strip() != "")
+    return df[mask]
 
 
 def type_table_suffix(type_name: str, type_slug_map: dict = None) -> str:
@@ -245,7 +248,7 @@ def build_collaborators(authors_df: pd.DataFrame, results_df: pd.DataFrame) -> p
     return out_df[cols].drop_duplicates()
 
 
-def read_enriched_table(table_name: str) -> pd.DataFrame:
+def read_table(table_name: str) -> pd.DataFrame:
     full_table_name = f"{DATABASE}.{table_name}"
     try:
         df = spark.table(full_table_name).toPandas()
@@ -330,8 +333,8 @@ def log_unmapped_subtypes(df: pd.DataFrame, subtype_column: str, known_types, sc
 if run_scholarly_activities:
     scholarly_cfg = FAR_TEMPLATES_CONFIG["Scholarly Activities"]
 
-    research_output_df = read_enriched_table(f"enriched_research_output_{CURRENT_DAY}")
-    research_output_authors_df = read_enriched_table(f"enriched_research_output_authors_{CURRENT_DAY}")
+    research_output_df = read_table(f"enriched_research_output_{CURRENT_DAY}")
+    research_output_authors_df = read_table(f"enriched_research_output_authors_{CURRENT_DAY}")
 
     if not research_output_df.empty:
         log_unmapped_subtypes(research_output_df, "subtype", scholarly_cfg["subtype_to_type"].keys(), "scholarly_activities")
@@ -371,7 +374,7 @@ if run_scholarly_activities:
             type_name, len(df_template), len(collaborators_df),
         )
 
-    scholarly_deletes_df = build_deletes_export(read_enriched_table(f"enriched_research_output_deletes_{CURRENT_DAY}"))
+    scholarly_deletes_df = build_deletes_export(read_table(f"enriched_research_output_deletes_{CURRENT_DAY}"))
     if not scholarly_deletes_df.empty:
         remote_path = upload_df_to_sftp(
             csv_ready(scholarly_deletes_df), SFTP_BASE, scholarly_cfg["sftp_folder"], "deletes",
@@ -393,8 +396,8 @@ else:
 if run_grants:
     grants_cfg = FAR_TEMPLATES_CONFIG["Grants"]
 
-    grants_df = read_enriched_table(f"enriched_grants_{CURRENT_DAY}")
-    grants_authors_df = read_enriched_table(f"enriched_grants_authors_{CURRENT_DAY}")
+    grants_df = read_table(f"enriched_grants_{CURRENT_DAY}")
+    grants_authors_df = read_table(f"enriched_grants_authors_{CURRENT_DAY}")
 
     for type_name in grants_cfg["types"]:  # just ["Award"] -- Pure's own Project/Award split is not exposed to FAR
         df_template = build_far_template(
@@ -431,7 +434,7 @@ if run_grants:
             type_name, len(df_template), len(collaborators_df),
         )
 
-    grants_deletes_df = build_deletes_export(read_enriched_table(f"enriched_grants_deletes_{CURRENT_DAY}"))
+    grants_deletes_df = build_deletes_export(read_table(f"enriched_grants_deletes_{CURRENT_DAY}"))
     if not grants_deletes_df.empty:
         remote_path = upload_df_to_sftp(
             csv_ready(grants_deletes_df), SFTP_BASE, grants_cfg["sftp_folder"], "deletes",
@@ -454,7 +457,7 @@ if run_custom_sections:
     custom_cfg = FAR_TEMPLATES_CONFIG["Custom Sections"]
     type_slug_map = custom_cfg["type_slug"]
 
-    custom_sections_df = read_enriched_table(f"enriched_custom_sections_{CURRENT_DAY}")
+    custom_sections_df = read_table(f"enriched_custom_sections_{CURRENT_DAY}")
     log_unmapped_subtypes(custom_sections_df, "subtype", custom_cfg["types"], "custom_sections")
 
     for type_name in custom_cfg["types"]:
@@ -485,7 +488,7 @@ if run_custom_sections:
         # (it has no author data at all, internal or external).
         logger.info("[custom_sections] %s: %d rows exported", type_name, len(df_template))
 
-    custom_sections_deletes_df = build_deletes_export(read_enriched_table(f"enriched_custom_sections_deletes_{CURRENT_DAY}"))
+    custom_sections_deletes_df = build_deletes_export(read_table(f"enriched_custom_sections_deletes_{CURRENT_DAY}"))
     if not custom_sections_deletes_df.empty:
         remote_path = upload_df_to_sftp(
             csv_ready(custom_sections_deletes_df), SFTP_BASE, custom_cfg["sftp_folder"], "deletes",
@@ -547,6 +550,11 @@ for scope, (main_table, deletes_table) in scope_tables.items():
 summary_df = pd.DataFrame(summary_rows).sort_values(["scope", "status", "subtype"]).reset_index(drop=True)
 summary_df = summary_df[["scope", "status", "subtype", "count"]]
 
+# Persisted (not just printed) so the client dashboard renderer can read
+# today's per-type/status breakdown after this job has finished -- see
+# dashboard_metrics_<date> below for the curated, named-KPI counterpart.
+save_table(summary_df, f"dashboard_summary_detail_{CURRENT_DAY}")
+
 # Printed per scope, each with its own subtotal -- a single combined
 # TOTAL across scopes (e.g. Grants + Scholarly Activities + Custom
 # Sections added together) isn't a meaningful number on its own.
@@ -554,4 +562,138 @@ for scope in summary_df["scope"].unique():
     scope_df = summary_df[summary_df["scope"] == scope]
     print(scope_df.to_string(index=False))
     print(f"TOTAL ({scope}): {scope_df['count'].sum()}\n")
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Dashboard metrics
+# MAGIC Curated, named KPIs for the client-facing dashboard (formulas defined
+# MAGIC by `data-analyst`, see `project_hbku_data_analyst_dashboard_kpis` in
+# MAGIC this repo's memory) -- distinct from `dashboard_summary_detail_<date>`
+# MAGIC above, which is the raw per-type/status diagnostic breakdown. Long
+# MAGIC format (`scope`/`metric`/`dimension`/`value`) so this table doesn't
+# MAGIC need a schema change every time a new KPI is added. `dimension` is
+# MAGIC `"(n/a)"` for metrics with no natural breakdown; `value` is always
+# MAGIC numeric (a plain count, or a 0-1 rate for `faculty_match_rate` --
+# MAGIC NULL, not 0, when its denominator is zero, so "no internal
+# MAGIC participants today" isn't confused with "0% match rate today").
+# MAGIC
+# MAGIC Unguarded like the summary block above -- re-reads each source table
+# MAGIC fresh (tolerating a missing one as zero/empty) instead of depending on
+# MAGIC the per-scope blocks' local variables, so a single-scope run (`SCOPE`
+# MAGIC widget) still produces a full (if partial) metrics row set.
+# MAGIC
+# MAGIC Research Output / Custom Sections have no KPI here beyond
+# MAGIC deletes-received/delivered -- both scopes only ever process DELETEs in
+# MAGIC this repo (see module docstring), so "enriched"/"delivered new or
+# MAGIC update"/"collaborators exported" don't apply to them; that's covered
+# MAGIC by `tss-dedup`'s side of the combined dashboard instead.
+
+# COMMAND ----------
+
+def add_metric(rows: list, scope: str, metric: str, dimension: str, value) -> None:
+    rows.append({"scope": scope, "metric": metric, "dimension": dimension, "value": value})
+
+
+def faculty_match_rate(authors_df: pd.DataFrame):
+    """
+    G3: share of internal (`internal == 1`) participants with a resolved
+    `faculty_id` -- reuses `_is_internal`/`filter_to_internal_faculty`'s
+    exact internal+faculty_id logic so this always agrees with which rows
+    actually make it into a FAR template. Returns None (not 0) when there
+    were no internal participants at all today, so an empty day isn't
+    reported as a 0% match rate.
+    """
+    if authors_df.empty or "internal" not in authors_df.columns:
+        return None
+    internal_df = authors_df[_is_internal(authors_df)]
+    if internal_df.empty:
+        return None
+    return len(filter_to_internal_faculty(internal_df)) / len(internal_df)
+
+
+def grants_silently_dropped(enriched_grants_df: pd.DataFrame, results_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    G6: non-delete grants that changed today but produced no FAR row at
+    all -- every participant was external, or none resolved a faculty_id,
+    so build_far_template's inner join (see its docstring) dropped the
+    grant entirely with no log line. Mirrors that same inner join as an
+    anti-join instead, keyed on `uuid_output` (== the original
+    enriched_grants `uuid` -- see far_templates.py's
+    Pure_Grants_Transformer, whose "Record ID"/"uuid_output" are both just
+    that same uuid under different FAR-facing names).
+    """
+    empty_result = pd.DataFrame(columns=["uuid", "changeType", "title"])
+    if enriched_grants_df.empty:
+        return empty_result
+    changed_df = enriched_grants_df[enriched_grants_df["changeType"] != "DELETE"]
+    if changed_df.empty:
+        return empty_result
+    delivered_uuids = (
+        set(results_df["uuid_output"]) if not results_df.empty and "uuid_output" in results_df.columns else set()
+    )
+    dropped = changed_df[~changed_df["uuid"].isin(delivered_uuids)]
+    cols = [c for c in ["uuid", "changeType", "title"] if c in dropped.columns]
+    return dropped[cols].drop_duplicates(subset="uuid")
+
+# COMMAND ----------
+
+metrics_rows = []
+
+# --- Scholarly Activities / Custom Sections: deletes-only scopes today
+# (see module docstring's "hallazgo estructural") ---
+for metrics_scope, changes_table, deletes_table in [
+    ("scholarly_activities", "changes_scholarly_activities", "enriched_research_output_deletes"),
+    ("custom_sections", "changes_custom_sections", "enriched_custom_sections_deletes"),
+]:
+    received_df = read_table(f"{changes_table}_{CURRENT_DAY}")
+    add_metric(metrics_rows, metrics_scope, "deletes_received", "(n/a)", len(received_df))
+
+    delivered_df = read_table(f"{deletes_table}_{CURRENT_DAY}")
+    add_metric(metrics_rows, metrics_scope, "deletes_delivered", "(n/a)", len(delivered_df))
+
+# --- Grants: new+update+delete, single source of truth (no dedup dependency) ---
+grants_changes_df = read_table(f"changes_grants_{CURRENT_DAY}")
+if not grants_changes_df.empty:
+    for change_type, count in grants_changes_df.groupby("changeType").size().items():
+        add_metric(metrics_rows, "grants", "received", change_type, count)  # G1
+
+grants_enriched_df = read_table(f"enriched_grants_{CURRENT_DAY}")
+add_metric(metrics_rows, "grants", "enriched", "(n/a)", len(grants_enriched_df))  # G2
+
+grants_authors_df = read_table(f"enriched_grants_authors_{CURRENT_DAY}")
+add_metric(metrics_rows, "grants", "faculty_match_rate", "(n/a)", faculty_match_rate(grants_authors_df))  # G3
+
+grants_results_df = read_table(f"far_results_award_{CURRENT_DAY}")
+if not grants_results_df.empty and "changetype" in grants_results_df.columns:
+    for change_type, count in grants_results_df.groupby("changetype").size().items():
+        status_folder = CHANGE_TYPE_TO_STATUS_FOLDER.get(change_type, change_type)
+        add_metric(metrics_rows, "grants", "delivered", status_folder, count)  # G4
+add_metric(
+    metrics_rows, "grants", "distinct_delivered", "(n/a)",
+    grants_results_df["record_id"].nunique() if not grants_results_df.empty else 0,
+)  # G5
+
+grants_dropped_df = grants_silently_dropped(grants_enriched_df, grants_results_df)
+add_metric(metrics_rows, "grants", "silently_dropped", "(n/a)", len(grants_dropped_df))  # G6
+
+grants_deletes_delivered_df = read_table(f"enriched_grants_deletes_{CURRENT_DAY}")
+add_metric(metrics_rows, "grants", "deletes_delivered", "(n/a)", len(grants_deletes_delivered_df))  # G7
+
+grants_collaborators_df = read_table(f"far_collaborators_award_{CURRENT_DAY}")
+add_metric(metrics_rows, "grants", "collaborators_exported", "(n/a)", len(grants_collaborators_df))  # G8
+
+# COMMAND ----------
+
+dashboard_metrics_df = pd.DataFrame(metrics_rows)
+dashboard_metrics_df["value"] = pd.to_numeric(dashboard_metrics_df["value"], errors="coerce")
+dashboard_metrics_df = dashboard_metrics_df.sort_values(["scope", "metric", "dimension"]).reset_index(drop=True)
+
+save_table(dashboard_metrics_df, f"dashboard_metrics_{CURRENT_DAY}")
+save_table(grants_dropped_df, f"dashboard_grants_dropped_{CURRENT_DAY}")
+
+print(dashboard_metrics_df.to_string(index=False))
+if not grants_dropped_df.empty:
+    print(f"\n{len(grants_dropped_df)} grant(s) silently dropped today (no internal author resolved):")
+    print(grants_dropped_df.to_string(index=False))
 
