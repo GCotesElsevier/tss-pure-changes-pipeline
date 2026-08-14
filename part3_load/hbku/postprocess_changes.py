@@ -701,14 +701,14 @@ if not grants_dropped_df.empty:
 
 # MAGIC %md
 # MAGIC ## Client dashboard report
-# MAGIC Renders and uploads the Grants client-facing HTML report — see
-# MAGIC `dashboard_report.py` for the renderer itself. Run down here (not
-# MAGIC alongside the Grants section above) because it reads
-# MAGIC `dashboard_metrics_<CURRENT_DAY>` / `dashboard_grants_dropped_<CURRENT_DAY>`,
-# MAGIC which are only created by the "Dashboard metrics" section just above.
-# MAGIC Research Output / Custom Sections have no report yet — that's a
-# MAGIC separate future piece of work (combined dedup+changes report, reading
-# MAGIC `tss-dedup`'s `dashboard_run_summary`).
+# MAGIC Renders and uploads the client-facing HTML report for every scope
+# MAGIC that ran today (Grants, and now Scholarly Activities / Custom
+# MAGIC Sections combined with `tss-dedup`'s matching data) — see
+# MAGIC `dashboard_report.py` for the renderers themselves. Run down here (not
+# MAGIC alongside each scope's section above) because it reads
+# MAGIC `dashboard_metrics_<CURRENT_DAY>` / `dashboard_summary_detail_<CURRENT_DAY>` /
+# MAGIC `dashboard_grants_dropped_<CURRENT_DAY>`, which are only created by the
+# MAGIC "Dashboard metrics" section just above.
 
 # COMMAND ----------
 

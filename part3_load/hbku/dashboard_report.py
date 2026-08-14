@@ -1,38 +1,51 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # Part 3 — Client dashboard report (Grants)
-# MAGIC Renders the client-facing HTML execution report for the **Grants**
-# MAGIC scope and uploads it next to the CSV exports on SFTP, and uploads it
-# MAGIC to SFTP. Reads the 2 tables `postprocess_changes.py` already persists
-# MAGIC at the end of its run (same `CURRENT_DAY`, same pipeline execution):
-# MAGIC `dashboard_metrics_<CURRENT_DAY>` (curated KPIs, long format) and
-# MAGIC `dashboard_grants_dropped_<CURRENT_DAY>` (silently-dropped grants
-# MAGIC list). See `project_hbku_dev_dashboard_metrics_20260814` in this
-# MAGIC repo's memory for how those 2 tables are built.
+# MAGIC # Part 3 — Client dashboard report
+# MAGIC Renders the client-facing HTML execution report for each scope and
+# MAGIC uploads it next to that scope's CSV exports on SFTP. Two independent
+# MAGIC pieces, added in 2 phases:
 # MAGIC
-# MAGIC **Grants is the simple case**: this repo is the only data source for
-# MAGIC it (new + update + delete, no `tss-dedup` dependency — see
-# MAGIC `project_dashboard_feature_architecture.md`'s 2026-08-14 scoping
-# MAGIC correction). Research Output / Custom Sections are explicitly **out of
-# MAGIC scope here** — their combined dedup+changes report is a separate,
-# MAGIC future piece of work that also needs to read `tss-dedup`'s
-# MAGIC `dashboard_run_summary` table.
+# MAGIC **Grants** (phase 1, `render_grants_report_html`): this repo is the
+# MAGIC only data source (new + update + delete, no `tss-dedup` dependency —
+# MAGIC see `project_dashboard_feature_architecture.md`'s 2026-08-14 scoping
+# MAGIC correction). Reads `dashboard_metrics_<CURRENT_DAY>` (curated KPIs,
+# MAGIC long format) and `dashboard_grants_dropped_<CURRENT_DAY>`
+# MAGIC (silently-dropped grants list) — both persisted by
+# MAGIC `postprocess_changes.py`, see `project_hbku_dev_dashboard_metrics_20260814`
+# MAGIC in this repo's memory.
+# MAGIC
+# MAGIC **Scholarly Activities / Custom Sections** (phase 2,
+# MAGIC `render_ro_cs_report_html`): combines this repo's own deletes-only data
+# MAGIC with `tss-dedup`'s matching/dedup instrumentation
+# MAGIC (`dashboard_run_summary` for Scholarly Activities,
+# MAGIC `custom_dashboard_run_summary` for Custom Sections) — both tables live
+# MAGIC in the SAME Databricks catalog/schema this repo already reads/writes
+# MAGIC (`academicinformationsystems_technicalservices.hbku`), so it's a plain
+# MAGIC same-catalog Spark read, no cross-repo plumbing. See
+# MAGIC `project_hbku_dashboard_ro_cs_renderer_20260814` for the exact schema
+# MAGIC assumptions (scope label matching, `run_date` format, per-`type` grain)
+# MAGIC that still need validating against a real `tss-dedup` row — none of the
+# MAGIC 3 recurring Jobs exist yet, so today there is normally NO row for
+# MAGIC today's `run_date`, and this renderer is built to degrade gracefully
+# MAGIC (a "not available for this run" state) rather than fail when that's
+# MAGIC the case. The match-score histogram / borderline-matches table from
+# MAGIC the original mockup are NOT built here — `dashboard_run_summary`'s
+# MAGIC given schema only has aggregate counts, not per-bucket/per-record score
+# MAGIC detail; that's flagged as a gap for `tss-dedup`'s `dev-hbku`, not
+# MAGIC guessed at.
 # MAGIC
 # MAGIC **Design**: CSS variables/classes are ported 1:1 from the approved
 # MAGIC mockup (https://claude.ai/code/artifact/36b5279f-2b02-4345-ae85-329715e37301,
 # MAGIC built with the `dataviz` skill's validated default palette — not
 # MAGIC re-validated here since the colors are unchanged, only which
-# MAGIC components are used). Per that mockup's own spec-notes for a
-# MAGIC Grants-only job: no dedup section (no match-score histogram, no
-# MAGIC borderline-matches table), and the volume card is New/Updated/Deleted
-# MAGIC instead of Deletes-only. The rendered report is 100% English —
+# MAGIC components are used per scope). The rendered report is 100% English —
 # MAGIC client-facing deliverable, distinct from this repo's Spanish-first
 # MAGIC internal conventions.
 # MAGIC
-# MAGIC `render_grants_report_html` below has no Spark/`dbutils` dependency —
-# MAGIC it's plain Python + `html.escape`, so it can be unit-tested with
-# MAGIC synthetic dicts/lists outside Databricks, same as the metric helpers
-# MAGIC in `postprocess_changes.py`.
+# MAGIC Both `render_*_report_html` functions have no Spark/`dbutils`
+# MAGIC dependency — plain Python + `html.escape`, unit-testable with synthetic
+# MAGIC dicts/lists outside Databricks, same as the metric helpers in
+# MAGIC `postprocess_changes.py`.
 
 # COMMAND ----------
 
@@ -76,6 +89,8 @@ logger.propagate = False
 dbutils.widgets.text("SCOPE", "ALL", "Scope to run (or ALL)")
 scope_widget = dbutils.widgets.get("SCOPE")
 run_grants = scope_widget in ("ALL", "Grants")
+run_scholarly_activities = scope_widget in ("ALL", "Scholarly Activities")
+run_custom_sections = scope_widget in ("ALL", "Custom Sections")
 
 # COMMAND ----------
 
@@ -196,7 +211,7 @@ REPORT_CSS = """
   details.table-toggle[open] summary:before { content: "Hide table  \\2304"; }
   details.table-toggle .data-table { margin-top: 10px; }
 
-  .callout-row { display: grid; grid-template-columns: 1fr; gap: 14px; }
+  .callout-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
   .callout {
     border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px;
     display: flex; align-items: center; justify-content: space-between;
@@ -204,6 +219,11 @@ REPORT_CSS = """
   .callout .callout-label { font-size: 12.5px; color: var(--text-secondary); }
   .callout .callout-value { font-size: 18px; font-weight: 600; }
   .callout .callout-value.good { color: var(--status-good-text); }
+
+  .notice {
+    border: 1px dashed var(--border); border-radius: 10px; padding: 14px 16px;
+    font-size: 13px; color: var(--text-secondary); text-align: center;
+  }
 
   footer.report-footer {
     margin-top: 8px; padding-top: 16px; border-top: 1px solid var(--border);
@@ -418,6 +438,156 @@ def render_grants_report_html(
 
 # COMMAND ----------
 
+def render_ro_cs_report_html(
+    client_name: str,
+    scope_label: str,
+    run_date: str,
+    report_generated: str,
+    dedup_available: bool,
+    dedup: dict,
+    deletes_delivered,
+    deletions_by_subtype: list,
+    cross_type_label: str,
+    cross_type_value,
+) -> str:
+    """
+    Builds the full standalone HTML document for a Scholarly Activities /
+    Custom Sections client dashboard report. `dedup` is the aggregated
+    dashboard_run_summary/custom_dashboard_run_summary row(s) for today
+    (see aggregate_dedup_rows) -- empty/ignored when `dedup_available` is
+    False (no matching row for today's run_date, e.g. because tss-dedup's
+    recurring Job hasn't run yet). `deletions_by_subtype` is a list of
+    {"subtype", "count"} dicts from this repo's own
+    dashboard_summary_detail_<date> (status == "delete").
+
+    Unlike Grants, the match-score histogram / borderline-matches cards
+    from the original mockup are NOT rendered -- the given
+    dashboard_run_summary schema (aggregate counts only) has no per-bucket
+    or per-record score detail to show. That section always renders as an
+    explicit gap notice instead of an invented/misleading chart.
+    """
+    no_facultyid_skipped = dedup.get("no_facultyid_skipped") if dedup_available else None
+    has_warnings = (not dedup_available) or ((no_facultyid_skipped or 0) > 0)
+    badge_label = "Completed with warnings" if has_warnings else "Completed"
+    badge_class = "status-warning" if has_warnings else "status-good"
+
+    if dedup_available:
+        evaluated = dedup.get("total_source", 0)
+        matched = dedup.get("matched", 0)
+        match_rate = dedup.get("match_rate")
+        exported_new = dedup.get("exported_step3", 0)
+        evaluated_sub = "Pure records compared against FAR"
+        matched_sub = f"{_fmt_rate(match_rate)} match rate"
+        exported_sub = "No existing FAR counterpart found"
+    else:
+        evaluated = matched = exported_new = None
+        evaluated_sub = matched_sub = exported_sub = "Dedup data not available for this run"
+
+    stat_tiles = "".join([
+        _stat_tile("Records evaluated", _fmt_int(evaluated) if dedup_available else "n/a", evaluated_sub),
+        _stat_tile("Matched to existing FAR record", _fmt_int(matched) if dedup_available else "n/a", matched_sub),
+        _stat_tile("New records exported", _fmt_int(exported_new) if dedup_available else "n/a", exported_sub),
+        _stat_tile("Records deleted", _fmt_int(deletes_delivered), "Removed in Pure since last run"),
+    ])
+
+    sorted_deletions = sorted(deletions_by_subtype, key=lambda row: row["count"], reverse=True)
+    max_deletion = max((row["count"] for row in sorted_deletions), default=0)
+    if sorted_deletions:
+        bar_rows_html = []
+        deletion_table_rows = []
+        for row in sorted_deletions:
+            width_pct = round(row["count"] / max_deletion * 100) if max_deletion else 0
+            bar_rows_html.append(
+                f'<div class="bar-row"><div class="cat">{html_lib.escape(str(row["subtype"]))}</div>'
+                f'<div class="bar-track"><div class="bar-fill" style="width:{width_pct}%"></div></div>'
+                f'<div class="val">{_fmt_int(row["count"])}</div></div>'
+            )
+            deletion_table_rows.append(
+                f'<tr><td>{html_lib.escape(str(row["subtype"]))}</td><td>{_fmt_int(row["count"])}</td></tr>'
+            )
+        deletions_section_html = f"""
+    <div class="bar-chart-wrap" role="img" aria-label="Deletions by record type">
+      {"".join(bar_rows_html)}
+    </div>
+    <details class="table-toggle">
+      <summary></summary>
+      <table class="data-table">
+        <thead><tr><th>Record type</th><th>Deletions</th></tr></thead>
+        <tbody>{"".join(deletion_table_rows)}</tbody>
+      </table>
+    </details>"""
+    else:
+        deletions_section_html = '<div class="notice">No deletions today.</div>'
+
+    if dedup_available:
+        quality_callouts = [
+            f'<div class="callout"><span class="callout-label">Skipped — missing Faculty ID</span>'
+            f'<span class="callout-value">{_fmt_int(no_facultyid_skipped)}</span></div>'
+        ]
+        if cross_type_value is not None:
+            quality_callouts.append(
+                f'<div class="callout"><span class="callout-label">{html_lib.escape(cross_type_label)}</span>'
+                f'<span class="callout-value">{_fmt_int(cross_type_value)}</span></div>'
+            )
+        quality_section_html = f'<div class="callout-row">{"".join(quality_callouts)}</div>'
+    else:
+        quality_section_html = '<div class="notice">Dedup data quality metrics not available for this run.</div>'
+
+    client_esc = html_lib.escape(client_name)
+    scope_esc = html_lib.escape(scope_label)
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{client_esc} — {scope_esc} — Execution Report</title>
+<style>{REPORT_CSS}</style>
+</head>
+<body>
+<div class="viz-root">
+
+  <div class="report-header">
+    <div>
+      <h1>{client_esc} — {scope_esc} — Execution Report</h1>
+      <div class="meta">
+        <b>Run date:</b> {html_lib.escape(run_date)} &nbsp;·&nbsp; <b>Report generated:</b> {html_lib.escape(report_generated)}<br>
+        <b>Job:</b> {scope_esc} pipeline (dedup → changes) &nbsp;·&nbsp; <b>Pipeline steps:</b> tss-dedup (new) + changes pipeline (deletes)
+      </div>
+    </div>
+    <span class="badge {badge_class}"><span class="dot"></span>{badge_label}</span>
+  </div>
+
+  <div class="stat-row">{stat_tiles}</div>
+
+  <section class="card">
+    <h2>Deletions by record type</h2>
+    <p class="subtitle">Records removed in Pure and retracted from FAR, this run</p>
+    {deletions_section_html}
+  </section>
+
+  <section class="card">
+    <h2>Match score detail</h2>
+    <p class="subtitle">Matched records only — score distribution and borderline matches</p>
+    <div class="notice">Score-level detail is not available in this report yet — tss-dedup's dashboard_run_summary only exposes aggregate counts (matched / unmatched / match_rate), not a per-record or per-bucket score breakdown. Showing this section requires additional instrumentation on tss-dedup's side.</div>
+  </section>
+
+  <section class="card">
+    <h2>Data quality</h2>
+    <p class="subtitle">Records skipped or adjusted during matching</p>
+    {quality_section_html}
+  </section>
+
+  <footer class="report-footer">
+    Generated automatically from the {client_esc} Pure → FAR migration pipeline. For questions about this report, contact your Elsevier project team.
+  </footer>
+
+</div>
+</body>
+</html>"""
+
+# COMMAND ----------
+
 def read_table(table_name: str) -> pd.DataFrame:
     full_table_name = f"{DATABASE}.{table_name}"
     try:
@@ -444,6 +614,84 @@ def _metric_by_dimension(df: pd.DataFrame, metric: str) -> dict:
         return {}
     match = df[df["metric"] == metric]
     return {row["dimension"]: row["value"] for _, row in match.iterrows() if pd.notna(row["value"])}
+
+
+DEDUP_SUM_COLS = [
+    "total_source", "total_target", "matched", "unmatched",
+    "no_facultyid_skipped", "cross_type_removed", "cross_type_matched",
+    "had_candidate_below_threshold", "no_candidate", "initial_step3", "exported_step3",
+]
+
+
+def read_dedup_scope_rows(table_name: str, scope_value: str) -> pd.DataFrame:
+    """
+    tss-dedup writes dashboard_run_summary / custom_dashboard_run_summary
+    to the SAME catalog/schema this repo already reads/writes
+    (academicinformationsystems_technicalservices.hbku) -- a direct Spark
+    read via the existing `read_table`, no cross-repo plumbing needed.
+
+    Neither the exact stored `scope` label nor `run_date`'s type/format
+    were confirmed against a real row (the 3 recurring Databricks Jobs that
+    would produce one don't exist yet -- still manually chained) -- see
+    project_hbku_dashboard_ro_cs_renderer_20260814 in this repo's memory.
+    `run_date` is parsed defensively via pandas (handles a DATE column,
+    "YYYYMMDD", or "YYYY-MM-DD" alike) instead of assuming a Spark-side
+    string/DATE comparison would work; `scope` is matched case/whitespace
+    -insensitively for the same reason. Returns an empty DataFrame (with a
+    logged reason) for any failure mode -- missing table, missing columns,
+    scope not found, or no row for today -- so the caller can render a
+    single "not available for this run" state without distinguishing why.
+    """
+    df = read_table(table_name)
+    if df.empty:
+        return df
+    if "scope" not in df.columns or "run_date" not in df.columns:
+        logger.warning(
+            "%s is missing expected columns (scope/run_date) -- dedup section will show as not available.",
+            table_name,
+        )
+        return pd.DataFrame()
+
+    scope_rows = df[df["scope"].astype(str).str.strip().str.casefold() == scope_value.strip().casefold()]
+    if scope_rows.empty:
+        logger.warning(
+            "No rows for scope=%r in %s -- check the exact scope label tss-dedup writes.", scope_value, table_name,
+        )
+        return scope_rows
+
+    run_dates = pd.to_datetime(scope_rows["run_date"], errors="coerce").dt.strftime("%Y%m%d")
+    todays_rows = scope_rows[run_dates == CURRENT_DAY]
+    if todays_rows.empty:
+        logger.warning(
+            "No %s row for run_date=%s (scope=%s) -- tss-dedup's recurring Job may not have run yet today.",
+            table_name, CURRENT_DAY, scope_value,
+        )
+    return todays_rows
+
+
+def aggregate_dedup_rows(rows: pd.DataFrame) -> dict:
+    """
+    dashboard_run_summary/custom_dashboard_run_summary has one row per
+    `type` per scope+run_date (exact grain not confirmed -- see
+    read_dedup_scope_rows's docstring); summed to scope-level totals since
+    none of this report's stat tiles break down by type. `match_rate` is
+    recomputed from the summed matched/total_source (not averaged from
+    each row's own match_rate) so it stays a true ratio, same reasoning as
+    faculty_match_rate() in postprocess_changes.py.
+    """
+    if rows.empty:
+        return {}
+    totals = {
+        col: pd.to_numeric(rows[col], errors="coerce").fillna(0).sum()
+        for col in DEDUP_SUM_COLS if col in rows.columns
+    }
+    totals["match_rate"] = (totals["matched"] / totals["total_source"]) if totals.get("total_source") else None
+    if "threshold_used" in rows.columns:
+        threshold_series = rows["threshold_used"].dropna()
+        totals["threshold_used"] = float(threshold_series.iloc[0]) if not threshold_series.empty else None
+    else:
+        totals["threshold_used"] = None
+    return totals
 
 
 def upload_html_to_sftp(
@@ -504,3 +752,77 @@ if run_grants:
     logger.info("Uploaded Grants client dashboard report to %s", remote_path)
 else:
     logger.info("Skipping Grants dashboard report — SCOPE=%s", scope_widget)
+
+# COMMAND ----------
+
+# Per-scope config for the RO/CS report loop below. `dedup_scope_value` is
+# this repo's own scope naming ("Scholarly Activities" / "Custom
+# Sections") -- assumed to match what tss-dedup writes to its `scope`
+# column, not confirmed yet (see read_dedup_scope_rows's docstring).
+RO_CS_SCOPE_CONFIG = {
+    "scholarly_activities": {
+        "label": "Scholarly Activities",
+        "should_run": run_scholarly_activities,
+        "dedup_table": "dashboard_run_summary",
+        "dedup_scope_value": "Scholarly Activities",
+        "cross_type_field": "cross_type_matched",
+        "cross_type_label": "Cross-type matches (title override)",
+        "sftp_folder": FAR_TEMPLATES_CONFIG["Scholarly Activities"]["sftp_folder"],
+        "report_prefix": "HBKU_scholarly_activities_report",
+    },
+    "custom_sections": {
+        "label": "Custom Sections",
+        "should_run": run_custom_sections,
+        "dedup_table": "custom_dashboard_run_summary",
+        "dedup_scope_value": "Custom Sections",
+        "cross_type_field": "cross_type_removed",
+        "cross_type_label": "Cross-type duplicate pairs removed",
+        "sftp_folder": FAR_TEMPLATES_CONFIG["Custom Sections"]["sftp_folder"],
+        "report_prefix": "HBKU_custom_sections_report",
+    },
+}
+
+# COMMAND ----------
+
+for metrics_scope_value, cfg in RO_CS_SCOPE_CONFIG.items():
+    if not cfg["should_run"]:
+        logger.info("Skipping %s dashboard report — SCOPE=%s", cfg["label"], scope_widget)
+        continue
+
+    dedup_rows = read_dedup_scope_rows(cfg["dedup_table"], cfg["dedup_scope_value"])
+    dedup_available = not dedup_rows.empty
+    dedup = aggregate_dedup_rows(dedup_rows) if dedup_available else {}
+
+    metrics_df = read_table(f"dashboard_metrics_{CURRENT_DAY}")
+    scope_metrics_df = metrics_df[metrics_df["scope"] == metrics_scope_value] if not metrics_df.empty else metrics_df
+    deletes_delivered = _metric_value(scope_metrics_df, "deletes_delivered") or 0
+
+    summary_detail_df = read_table(f"dashboard_summary_detail_{CURRENT_DAY}")
+    if not summary_detail_df.empty:
+        deletion_rows_df = summary_detail_df[
+            (summary_detail_df["scope"] == metrics_scope_value) & (summary_detail_df["status"] == "delete")
+        ]
+        deletions_by_subtype = [
+            {"subtype": row["subtype"], "count": int(row["count"])} for _, row in deletion_rows_df.iterrows()
+        ]
+    else:
+        deletions_by_subtype = []
+
+    report_html = render_ro_cs_report_html(
+        client_name="HBKU",
+        scope_label=cfg["label"],
+        run_date=f"{YEAR}-{MONTH}-{DAY}",
+        report_generated=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        dedup_available=dedup_available,
+        dedup=dedup,
+        deletes_delivered=deletes_delivered,
+        deletions_by_subtype=deletions_by_subtype,
+        cross_type_label=cfg["cross_type_label"],
+        cross_type_value=dedup.get(cfg["cross_type_field"]) if dedup_available else None,
+    )
+
+    report_filename = f"{cfg['report_prefix']}_{YEAR}-{MONTH}-{DAY}.html"
+    remote_path = upload_html_to_sftp(
+        report_html, SFTP_BASE, cfg["sftp_folder"], report_filename, logger, secret_scope=SFTP_SECRET_SCOPE,
+    )
+    logger.info("Uploaded %s client dashboard report to %s", cfg["label"], remote_path)
