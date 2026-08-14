@@ -33,13 +33,11 @@ else:
     FAR_PUBLIC_KEY = None
     FAR_PRIVATE_KEY = None
 
-# UNCONFIRMED (2026-08-14): user's best guess by analogy with HBKU's
-# "hbku_dev", not yet verified by whoever provisioned Ajman's Faculty180
-# account. If wrong, FARUsersClient.fetch_all_users() should fail loudly
-# (INTF-DatabaseID drives auth/routing on Faculty180's side, so a bad value
-# is expected to 401/403/404 rather than silently return another client's
-# data) — but treat this value as provisional until confirmed.
-FAR_DATABASE = "ajman_dev"
+# Confirmed (2026-08-14) by whoever provisioned Ajman's Faculty180 account —
+# the earlier guess "ajman_dev" (by analogy with HBKU's "hbku_dev") got a
+# 403 Access Denied from FARUsersClient.fetch_all_users(); this is the real
+# value.
+FAR_DATABASE = "ajman"
 
 # Confirmed against ip-pure2far-integration/ajman_research_output/config.py
 # (that pipeline already ran successfully against real Ajman data) — NOT
