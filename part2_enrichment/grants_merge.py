@@ -11,12 +11,27 @@
 # MAGIC both sides — mirrors `pandas.merge(..., suffixes=(...))`, which is
 # MAGIC what `ip-pure2far-integration` used to build the same shape).
 # MAGIC
-# MAGIC **Known gap:** only the `Project -> Award` direction is implemented
-# MAGIC (via `projects/{uuid}/award-clusters`, the only bridge endpoint Pure
-# MAGIC exposes). There is no equivalent `awards/{uuid}/award-clusters` to go
-# MAGIC the other way, so a changed `Award` uuid (rare — 0 seen in Part 1's
-# MAGIC last 30-day check) currently has no linked `Project` looked up;
-# MAGIC revisit if `Award`-only changes turn out to matter in practice.
+# MAGIC **Both directions are implemented.** `Project -> Award` uses
+# MAGIC `projects/{uuid}/award-clusters` (a list of cluster objects, each with
+# MAGIC a `containedAwards` list). `Award -> Project` uses `awards/{uuid}/cluster`
+# MAGIC (singular -- a different sub-resource, returning ONE cluster object
+# MAGIC directly, with a `project` key pointing back). Two more-obvious
+# MAGIC guesses for the reverse direction were tried and confirmed NOT to work
+# MAGIC against the real HBKU Pure instance (2026-08-14): a top-level
+# MAGIC `award-clusters/{uuid}` resource ("Service not found" -- `AwardCluster`
+# MAGIC isn't independently fetchable) and a symmetric
+# MAGIC `awards/{uuid}/award-clusters` relation ("Content not found" -- no such
+# MAGIC relation registered under `awards`, unlike `projects`). The working
+# MAGIC endpoint is proven in production by `ip-pure2far-integration`'s
+# MAGIC `read_awards_cluster`/`get_award_clusters` (`utils.py`/`transform.py`)
+# MAGIC against this same Pure instance -- ported here, not guessed.
+# MAGIC
+# MAGIC This was a "rare — 0 seen in Part 1's last 30-day check" gap when this
+# MAGIC file was first written (2026-07-06); revisited because it turned out
+# MAGIC to be common in practice (8 `Award` `UPDATE` events in a single day,
+# MAGIC 2026-08-14 — see `project_hbku_qa_dashboard_grants_dropped_title_20260814`
+# MAGIC in this repo's memory), each landing with a literal `"None"` title
+# MAGIC placeholder for lack of a resolved `Project`.
 
 # COMMAND ----------
 
@@ -32,6 +47,19 @@ def find_linked_award_uuid(pure_api, project_uuid: str):
         if contained_awards:
             return contained_awards[0].get("uuid")
     return None
+
+
+def find_linked_project_uuid(pure_api, award_uuid: str):
+    """
+    Looks up the Project uuid linked to an Award via `awards/{uuid}/cluster`
+    -- see the module docstring's "Both directions are implemented" note for
+    why this endpoint (not the more obvious-looking guesses) and where it's
+    already proven in production. Returns None if the award has no cluster
+    linked (`cluster` object present but `project` key absent/empty --
+    not observed in practice, but the response shape doesn't rule it out).
+    """
+    cluster = pure_api.read_record("awards", f"{award_uuid}/cluster")
+    return (cluster.get("project") or {}).get("uuid")
 
 
 def merge_project_and_award(project: dict, award: dict) -> dict:
@@ -60,9 +88,9 @@ def merge_project_and_award(project: dict, award: dict) -> dict:
 def fetch_and_merge_grant(pure_api, uuid: str, family: str) -> dict:
     """
     Given a changed uuid and its Pure family ("Project" or "Award"), fetches
-    the full record and its counterpart (Project -> Award direction only —
-    see the "Known gap" note above), and returns the merged dict ready for
-    `flatten_dataframe` + `HBKU_cfg_transform_grants.GRANTS_TRANSFORM_CONFIG`.
+    the full record and its counterpart (both directions — see the module
+    docstring), and returns the merged dict ready for `flatten_dataframe` +
+    `HBKU_cfg_transform_grants.GRANTS_TRANSFORM_CONFIG`.
     """
     if family == "Project":
         project = pure_api.read_record("projects", uuid)
@@ -72,6 +100,14 @@ def fetch_and_merge_grant(pure_api, uuid: str, family: str) -> dict:
 
     if family == "Award":
         award = pure_api.read_record("awards", uuid)
-        return merge_project_and_award(None, award)
+        # Only attempt the cluster lookup if the raw payload actually has
+        # one -- every real Award seen so far does (124/124, 2026-08-14),
+        # but skipping the extra API call for a genuinely cluster-less
+        # Award avoids find_linked_project_uuid raising on a 404 that would
+        # otherwise fail this record's whole fetch (via
+        # enrich_changes.py's fetch_records_parallel retry wrapper).
+        project_uuid = find_linked_project_uuid(pure_api, uuid) if award.get("cluster") else None
+        project = pure_api.read_record("projects", project_uuid) if project_uuid else None
+        return merge_project_and_award(project, award)
 
     raise ValueError(f"Unexpected grants family: {family!r} (expected 'Project' or 'Award')")
