@@ -9,14 +9,14 @@ LEGACY_URL = dbutils.secrets.get(scope='integration-delivery-services', key='pur
 API_KEY = dbutils.secrets.get(scope='integration-delivery-services', key='pure-ajman-prod-api-key')
 API_URL = dbutils.secrets.get(scope='integration-delivery-services', key='pure-ajman-base-url')
 
-# Ajman's Faculty180 API access is still being provisioned (support ticket
-# in progress, 2026-07-23) — meanwhile, far_users_source.py reads a CSV the
-# user exported directly from Faculty180 (has faculty_id + email columns)
-# instead of calling the real API. Switch this to "api" once Ajman's FAR
-# API access is confirmed working — nothing else needs to change,
-# enrich_changes.py / initial_load_merge_base_snapshot.py both go through
-# far_users_source.get_email_to_faculty_id() either way.
-FAR_USERS_SOURCE = "csv_bypass"  # "csv_bypass" or "api"
+# Ajman's Faculty180 API access is now enabled (2026-08-12) and the HMAC
+# secrets exist in Databricks (2026-08-14) — switched from "csv_bypass" to
+# "api". far_users_source.py / initial_load_merge_base_snapshot.py both go
+# through far_users_source.get_email_to_faculty_id() either way, so no other
+# file needed to change. The old CSV bypass
+# (dbfs:/FileStore/ajman/far_users_bypass.csv) is left in place, unused, in
+# case "api" needs to be reverted while FAR_DATABASE below gets confirmed.
+FAR_USERS_SOURCE = "api"  # "csv_bypass" or "api"
 
 # TODO(user): confirm the real path after uploading the CSV to Databricks
 # (DBFS or a Unity Catalog Volume).
@@ -33,9 +33,13 @@ else:
     FAR_PUBLIC_KEY = None
     FAR_PRIVATE_KEY = None
 
-# TODO(user): confirm Ajman's real Faculty180 database identifier
-# (HBKU's is "hbku_dev") before switching FAR_USERS_SOURCE to "api".
-FAR_DATABASE = "REPLACE_ME_AJMAN_FAR_DATABASE"
+# UNCONFIRMED (2026-08-14): user's best guess by analogy with HBKU's
+# "hbku_dev", not yet verified by whoever provisioned Ajman's Faculty180
+# account. If wrong, FARUsersClient.fetch_all_users() should fail loudly
+# (INTF-DatabaseID drives auth/routing on Faculty180's side, so a bad value
+# is expected to 401/403/404 rather than silently return another client's
+# data) — but treat this value as provisional until confirmed.
+FAR_DATABASE = "ajman_dev"
 
 # Confirmed against ip-pure2far-integration/ajman_research_output/config.py
 # (that pipeline already ran successfully against real Ajman data) — NOT
