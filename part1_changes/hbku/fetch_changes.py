@@ -72,6 +72,22 @@ scopes_to_run = cfg if scope_widget == "ALL" else {scope_widget: cfg[scope_widge
 
 # COMMAND ----------
 
+# Collected across the loop and displayed as a table in the next cell —
+# with 3 scopes the log stream above can get long enough that Databricks
+# truncates it, burying the per-scope changeType groupby in the cut-off
+# part (same issue hit on Ajman's 2-scope run, 2026-08-14). A `display()`'d
+# table in its own cell survives that regardless of how noisy the log cell
+# above gets.
+#
+# Unlike Ajman (no change_types filter), this scope_summaries' per-
+# changeType "count" is taken AFTER the allow-list filter below, not
+# straight off the raw dedup like the log line above — Scholarly
+# Activities/Custom Sections only ever keep DELETE, so a pre-filter count
+# would overstate what was actually saved to output_table. raw_events/
+# unique_events stay pre-filter (same numbers as the log lines above) so
+# the table can still show how much the filter dropped.
+scope_summaries = []
+
 for scope_name, scope_cfg in scopes_to_run.items():
     families = scope_cfg["pure_families"]
     sync_state_table = SYNC_STATE_TABLES[scope_name]
@@ -101,6 +117,8 @@ for scope_name, scope_cfg in scopes_to_run.items():
     if allowed_types is not None and not changes_df.empty:
         changes_df = changes_df[changes_df["changeType"].isin(allowed_types)]
 
+    saved_type_counts = changes_df.groupby("changeType").size() if not changes_df.empty else pd.Series(dtype="int64")
+
     scope_slug = scope_name.lower().replace(" ", "_").replace(":", "")
     output_table = f"{DATABASE}.changes_{scope_slug}_{CURRENT_DAY}"
 
@@ -116,3 +134,35 @@ for scope_name, scope_cfg in scopes_to_run.items():
     # scopes' tokens, and must not skip this scope's events on retry.
     save_resumption_token(spark, DATABASE, sync_state_table, next_token)
     logger.info("Persisted resumption token for %s: %s", scope_name, next_token)
+
+    if saved_type_counts.empty:
+        scope_summaries.append(
+            {
+                "scope": scope_name,
+                "raw_events": len(raw_events),
+                "unique_events": len(deduped_events),
+                "changeType": None,
+                "count": 0,
+                "output_table": None,
+                "next_token": next_token,
+            }
+        )
+    else:
+        for change_type, count in saved_type_counts.items():
+            scope_summaries.append(
+                {
+                    "scope": scope_name,
+                    "raw_events": len(raw_events),
+                    "unique_events": len(deduped_events),
+                    "changeType": change_type,
+                    "count": int(count),
+                    "output_table": output_table,
+                    "next_token": next_token,
+                }
+            )
+
+# COMMAND ----------
+
+# Survives log truncation on the cell above — see comment where
+# scope_summaries is initialized.
+display(pd.DataFrame(scope_summaries))
