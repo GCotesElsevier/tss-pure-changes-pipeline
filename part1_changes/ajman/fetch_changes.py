@@ -162,4 +162,4 @@ for scope_name, scope_cfg in scopes_to_run.items():
 
 # Survives log truncation on the cell above — see comment where
 # scope_summaries is initialized.
-display(pd.DataFrame(scope_summaries))
+display(spark.createDataFrame(scope_summaries))
