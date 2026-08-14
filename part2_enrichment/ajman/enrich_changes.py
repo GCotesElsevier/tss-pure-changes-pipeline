@@ -94,6 +94,7 @@
 
 import logging
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
@@ -105,6 +106,15 @@ import pandas as pd
 # not a bug, just a lot of round trips. This bounds how many of those
 # requests run concurrently.
 FETCH_MAX_WORKERS = 8
+
+# A single transient read timeout (research.ajman.ac.ae took >30s to answer
+# ONE record out of ~7900, 2026-08-14) used to blow up the whole batch via
+# future.result() re-raising in the main thread — wasting every already-
+# completed call. Retried a few times with a short backoff before giving up
+# for real; a persistent failure still raises, on purpose (silently
+# dropping a record would be worse than failing loudly).
+FETCH_RETRY_ATTEMPTS = 3
+FETCH_RETRY_BACKOFF_SECONDS = 5
 
 # Same Arrow bug Part 1 hit (see part1_changes/hbku/fetch_changes.py): a
 # pandas -> Spark conversion can silently corrupt small/oddly-typed batches
@@ -186,6 +196,25 @@ def read_changes_table(scope_slug: str) -> pd.DataFrame:
         return pd.DataFrame(columns=["uuid", "changeType", "familySystemName", "version"])
 
 
+def _fetch_with_retries(fetch_fn, item):
+    """Retries a single fetch_fn(item) call on failure (network hiccups,
+    Pure returning a transient error) before giving up — see
+    FETCH_RETRY_ATTEMPTS."""
+    last_error = None
+    for attempt in range(1, FETCH_RETRY_ATTEMPTS + 1):
+        try:
+            return fetch_fn(item)
+        except Exception as e:
+            last_error = e
+            if attempt < FETCH_RETRY_ATTEMPTS:
+                logger.warning(
+                    "Fetch failed (attempt %d/%d) for %r: %s — retrying in %ds",
+                    attempt, FETCH_RETRY_ATTEMPTS, item, e, FETCH_RETRY_BACKOFF_SECONDS,
+                )
+                time.sleep(FETCH_RETRY_BACKOFF_SECONDS)
+    raise last_error
+
+
 def fetch_records_parallel(fetch_fn, items: list, label: str, max_workers: int = FETCH_MAX_WORKERS,
                             log_every: int = 200) -> list:
     """
@@ -194,7 +223,10 @@ def fetch_records_parallel(fetch_fn, items: list, label: str, max_workers: int =
     stateless per call), safe to parallelize. Preserves input order. Logs
     progress every `log_every` completions so a long batch (e.g. Scholarly
     Activities, thousands of records) visibly keeps moving instead of
-    looking stuck.
+    looking stuck. Each individual fetch is retried a few times (see
+    _fetch_with_retries) before a failure is allowed to abort the batch —
+    one transient timeout out of thousands of calls should not throw away
+    every already-completed one.
     """
     total = len(items)
     if total == 0:
@@ -205,7 +237,7 @@ def fetch_records_parallel(fetch_fn, items: list, label: str, max_workers: int =
     completed = 0
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        future_to_index = {executor.submit(fetch_fn, item): i for i, item in enumerate(items)}
+        future_to_index = {executor.submit(_fetch_with_retries, fetch_fn, item): i for i, item in enumerate(items)}
         for future in as_completed(future_to_index):
             index = future_to_index[future]
             results[index] = future.result()
