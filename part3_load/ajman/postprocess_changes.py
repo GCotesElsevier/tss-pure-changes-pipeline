@@ -84,6 +84,8 @@ logger.propagate = False
 
 # No Custom Sections transformers here — out of scope for Ajman (confirmed
 # with the user 2026-07-23; stays HBKU-only).
+# No "Editorial" type either — TSSH-1087 routes Pure "Editorial" through the
+# "Other" (Other Scholarly Work) transformer for Ajman.
 TRANSFORMER_MAP = {
     "Book": Pure_Books_Transformer,
     "Chapter": Pure_Chapter_Transformer,
@@ -91,7 +93,6 @@ TRANSFORMER_MAP = {
     "Proceeding": Pure_Conference_Transformer,
     "Other": Pure_Other_Transformer,
     "Patent": Pure_Patent_Transformer,
-    "Editorial": Pure_Editorial_Transformer,
     "Award": Pure_Grants_Transformer,
 }
 

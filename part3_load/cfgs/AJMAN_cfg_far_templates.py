@@ -31,7 +31,10 @@ FAR_TEMPLATES_CONFIG = {
             "Commissioned report": "Other",
             "Conference article": "Journal",
             "Conference contribution": "Proceeding",
-            "Editorial": "Editorial",
+            # TSSH-1087: Ajman wants Pure "Editorial" to land in FAR as
+            # "Other Scholarly Work" (the "Other" type here), not as its own
+            # Editorial type. HBKU keeps "Editorial" -> "Editorial".
+            "Editorial": "Other",
             "Foreword/postscript": "Other",
             "Letter": "Other",
             "Meeting Abstract": "Other",
@@ -41,7 +44,7 @@ FAR_TEMPLATES_CONFIG = {
             "Review article": "Journal",
             "Short survey": "Other",
         },
-        "types": ["Book", "Chapter", "Journal", "Proceeding", "Patent", "Other", "Editorial"],
+        "types": ["Book", "Chapter", "Journal", "Proceeding", "Patent", "Other"],
         "sftp_folder": "pure2far_scholarly",
     },
     "Grants": {
