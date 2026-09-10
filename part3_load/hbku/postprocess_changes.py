@@ -157,6 +157,105 @@ def type_table_suffix(type_name: str, type_slug_map: dict = None) -> str:
     return type_name.lower().replace(" ", "_").replace(":", "").replace("-", "_")
 
 
+# far_templates.py is shared with Ajman and its Scholarly Activities transformers
+# were ported from an older tss-dedup revision, so they have since drifted from
+# HBKU's own Step3_Postprocessor. This re-applies HBKU's choices on top of the
+# shared output (Ajman keeps far_templates.py's behaviour untouched). Each tweak
+# mirrors tss-dedup's current hbku/postprocessing/transformers.py:
+#   - Description blank on all 7 types (commit ca7b25c)
+#   - Books emit "BookType" (subtype through BOOK_TYPE_MAP); no classification
+#     column on the other types
+#   - Status Date as "YYYY-M-D" (no zero-pad, missing month/day -> 1) -- the
+#     format processed_research_outputs already carries, built upstream in
+#     ip-pure2far-integration's transform.py
+#   - Books/Chapter "Date Publication"/"Date Published" = Status Date
+#   - Other: "Journal Title" filled and "ISBN / ISSN" in place of "ISSN"
+HBKU_SCHOLARLY_TYPES = {"Book", "Chapter", "Journal", "Proceeding", "Other", "Patent", "Editorial"}
+
+BOOK_TYPE_MAP = {
+    "Entry for encyclopedia/dictionary": "Encyclopedia",
+    "Anthology": "Anthology",
+    "Book": "Book",
+}
+
+
+def _status_date_dedup_format(value):
+    """far_templates.py's "03/15/2024" -> tss-dedup's "2024-3-15"."""
+    if pd.isna(value) or not str(value).strip():
+        return ""
+    try:
+        month, day, year = str(value).strip().split("/")
+        return f"{int(year)}-{int(month)}-{int(day)}"
+    except (ValueError, TypeError):
+        return value
+
+
+def _fmt_isbn_issn(*values):
+    parts = [
+        str(v).strip() for v in values
+        if pd.notna(v) and str(v).strip() and str(v).strip().lower() != "nan"
+    ]
+    return "; ".join(parts) if parts else ""
+
+
+def apply_hbku_alignment(df_template: pd.DataFrame, df_all_data: pd.DataFrame, type_name: str) -> pd.DataFrame:
+    if type_name not in HBKU_SCHOLARLY_TYPES or df_template.empty:
+        return df_template
+
+    df = df_template.copy()
+
+    if "Description" in df.columns:
+        df["Description"] = ""
+
+    if "Status Date" in df.columns:
+        df["Status Date"] = df["Status Date"].map(_status_date_dedup_format)
+
+    if type_name == "Book":
+        cols = list(df.columns)
+        if "<Activity Classification Name>" in cols:
+            df.insert(
+                cols.index("<Activity Classification Name>"),
+                "BookType",
+                df["<Activity Classification Name>"].map(lambda s: BOOK_TYPE_MAP.get(s, "")),
+            )
+        df = df.drop(columns=["<Activity Classification Name>"], errors="ignore")
+        if "Date Publication" in df.columns:
+            df["Date Publication"] = df["Status Date"]
+    else:
+        df = df.drop(columns=["<Activity Classification Name>"], errors="ignore")
+
+    if type_name == "Chapter" and "Date Published" in df.columns:
+        df["Date Published"] = df["Status Date"]
+
+    if type_name == "Journal":
+        df = df.drop(columns=["Date Published"], errors="ignore")
+
+    if type_name == "Other":
+        by_uuid = df_all_data.drop_duplicates(subset="uuid").set_index("uuid")
+
+        def from_source(col):
+            if col not in by_uuid.columns:
+                return pd.Series([""] * len(df), index=df.index)
+            return df["uuid_output"].map(by_uuid[col]).fillna("")
+
+        df["Journal Title"] = from_source("journal_title")
+
+        isbn_issn = [
+            _fmt_isbn_issn(e, p, i)
+            for e, p, i in zip(
+                from_source("isbn_electronic"), from_source("isbn_print"), from_source("issn")
+            )
+        ]
+        cols = list(df.columns)
+        if "ISSN" in cols:
+            df.insert(cols.index("ISSN"), "ISBN / ISSN", isbn_issn)
+            df = df.drop(columns=["ISSN"], errors="ignore")
+        else:
+            df["ISBN / ISSN"] = isbn_issn
+
+    return df
+
+
 def build_far_template(primary_df, type_name, transformer_cls, authors_df=None, subtype_filter_col="subtype"):
     """
     Builds df_all_data (one row per record x internal author) for one
@@ -193,6 +292,7 @@ def build_far_template(primary_df, type_name, transformer_cls, authors_df=None, 
         return pd.DataFrame()
 
     df_template = transformer_cls().build(df_all_data)
+    df_template = apply_hbku_alignment(df_template, df_all_data, type_name)
 
     # changeType isn't a real FAR field -- attached here (by uuid, not by
     # position: .build() re-filters to internal rows internally too, so row
