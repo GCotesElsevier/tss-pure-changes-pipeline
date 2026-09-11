@@ -156,8 +156,6 @@ _CSS = """
   .sankey-node-label { font-family: 'Archivo', sans-serif; font-size: 11.5px; font-weight: 700; fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,0.38); stroke-width: 3px; stroke-linejoin: round; }
   .sankey-node-label .sk-val { font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
   .sankey-group-label { font-family: 'Archivo', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; fill: var(--ink-muted); }
-  .sankey-note { font-size: 12px; color: var(--ink-muted); margin-top: 10px; }
-  .sankey-note b { font-family:'IBM Plex Mono',monospace; color: var(--ink-secondary); font-weight:500; }
 
   .recon-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .recon-toolbar { padding: 16px 20px; border-bottom: 1px solid var(--border); display:flex; align-items:center; gap: 14px; flex-wrap:wrap; background: var(--surface); }
@@ -358,9 +356,14 @@ _JS_TEMPLATE = r"""
   (function() {
     const svg = document.getElementById('sankey');
     const GREY_DARK = "#8A8F96", GREY_MID = "#A9AEB4", GREY_LIGHT = "#C7CBD1";
-    const yStart = 28, minH = 46, leafGap = 12, bigGap = 36, groupGap = 64;
+    // Tighter than the mockup's original constants -- with Ajman's real,
+    // heavily-skewed volumes (a handful of New/Deleted next to thousands of
+    // Updated) the taller floor and wider gaps made the small flows look
+    // like a rendering glitch. Matches the scale tss-dedup's reconciliation
+    // report already uses successfully at similar real volumes.
+    const yStart = 24, minH = 30, leafGap = 8, bigGap = 20, groupGap = 40;
     const totalEvents = (RECEIVED.CREATE || 0) + (RECEIVED.UPDATE || 0) + (RECEIVED.DELETE || 0);
-    const k = Math.min(0.085, 1200 / (totalEvents || 1));
+    const k = Math.min(0.05, 900 / (totalEvents || 1));
     const wCol = 120, gapX = 270;
 
     const x0 = 20, x1 = x0 + wCol + gapX, x2 = x1 + wCol + gapX, x3 = x2 + wCol + gapX;
@@ -495,9 +498,15 @@ _JS_TEMPLATE = r"""
 
   function esc(s) { return s === null || s === undefined ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
+  // Filter by the FAR subtype (subtypeFar), not the raw Pure subtype -- FAR
+  // is what the client actually files by. Defaults to the first FAR
+  // subtype with data this run instead of "All subtypes" (same convention
+  // as tss-dedup's reconciliation report).
   const subtypeSelect = document.getElementById('subtypeFilter');
+  const subtypeOptions = Array.from(new Set(RECORDS.map(r => r.subtypeFar).filter(Boolean))).sort();
   subtypeSelect.innerHTML = '<option value="all">All subtypes</option>' +
-    Array.from(new Set(RECORDS.map(r => r.subtypePure).filter(Boolean))).sort().map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+    subtypeOptions.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  if (subtypeOptions.length) subtypeSelect.value = subtypeOptions[0];
 
   const body = document.getElementById('reconBody');
   const TOTAL_RECORDS = RECORDS.length;
@@ -519,7 +528,7 @@ _JS_TEMPLATE = r"""
         if (oc === 'dropped' && !r.outcome.startsWith('dropped')) return false;
         if (oc !== 'dropped' && r.outcome !== oc) return false;
       }
-      if (st !== 'all' && r.subtypePure !== st) return false;
+      if (st !== 'all' && r.subtypeFar !== st) return false;
       return true;
     });
 
@@ -660,18 +669,18 @@ def render_report_html(context: dict, scope: str) -> str:
     scope_label = _esc(context.get("scope_label", scope))
     eyebrow = _esc(context.get("eyebrow", f"{scope_label} · Pure → FAR"))
 
-    # The "Malformed"/"Excluded — malformed event" filter options, and the
-    # extra sankey-note sentence, only exist in the markup at all when this
-    # run actually had one — never an always-there-but-empty affordance.
+    # Hardcoded to "Manual Execution" for now -- every run today is a
+    # one-off someone kicks off by hand. Once Part 4 is wired to a
+    # recurring Databricks Job, this should read that context instead and
+    # say "Recurrent Job Execution" (flagged as a next step, not built yet).
+    execution_mode_label = _esc(context.get("execution_mode_label", "Manual Execution"))
+
+    # The "Malformed"/"Excluded — malformed event" filter options only exist
+    # in the markup at all when this run actually had one — never an
+    # always-there-but-empty affordance.
     event_option_malformed = '<option value="malformed">Malformed</option>' if malformed_count else ""
     outcome_option_malformed = (
         '<option value="excluded_malformed">Excluded — malformed event</option>' if malformed_count else ""
-    )
-    sankey_note_malformed = (
-        f" {_fmt_int(malformed_count)} additional event(s) this run were malformed (Pure sent them "
-        "with no usable identifier) and are excluded from every count above — shown separately as "
-        "\"Data quality\" below, not part of the received/delivered/dropped totals."
-        if malformed_count else ""
     )
 
     js = (
@@ -712,7 +721,7 @@ def render_report_html(context: dict, scope: str) -> str:
         <span>Faculty members affected <b class="mono tnum">{_fmt_int(context.get('faculty_affected', 0))}</b></span>
       </div>
     </div>
-    <div class="badge-fullload"><strong>ON-DEMAND DELIVERY</strong> &mdash; manual run, consolidates every change since your last delivery</div>
+    <div class="badge-fullload"><strong>{execution_mode_label.upper()}</strong></div>
   </div>
 </div>
 
@@ -741,7 +750,7 @@ def render_report_html(context: dict, scope: str) -> str:
       <div class="kpi-tile">
         <div class="kpi-label">Faculty match rate</div>
         <div class="kpi-value tnum">{_fmt_rate(context.get('match_rate'))}</div>
-        <div class="kpi-sub">internal Pure authors linked to a Faculty ID</div>
+        <div class="kpi-sub">internal Pure authors linked to a Faculty ID in FAR</div>
       </div>
     </div>
   </section>
@@ -789,11 +798,6 @@ def render_report_html(context: dict, scope: str) -> str:
     </div>
     <div class="sankey-card">
       <svg id="sankey" viewBox="0 0 1600 900" xmlns="http://www.w3.org/2000/svg"></svg>
-      <div class="sankey-note">
-        Every change event is routed by its type. <b>Dropped</b> = the record changed in Pure but none of its participants
-        resolve to an internal Faculty ID, so it is not delivered. Deletes pass straight through (1:1) as retractions.
-        Reconciliation: received = delivered + dropped, per event type.{sankey_note_malformed}
-      </div>
     </div>
   </section>
 </div>
