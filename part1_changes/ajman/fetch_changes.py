@@ -77,7 +77,7 @@ logger.info("Scopes: %s", list(cfg.keys()))
 # 2026-07-23 (232 CREATE events, confirmed from the real 2026-06-25 cutoff)
 # while Scholarly Activities waited on a fresh processed_* snapshot — see
 # project memory.
-dbutils.widgets.text("SCOPE", "ALL", "Scope to run (or ALL)")
+dbutils.widgets.dropdown("SCOPE", "ALL", ["ALL", "Scholarly Activities", "Grants"], "Scope to run (or ALL)")
 scope_widget = dbutils.widgets.get("SCOPE")
 scopes_to_run = cfg if scope_widget == "ALL" else {scope_widget: cfg[scope_widget]}
 

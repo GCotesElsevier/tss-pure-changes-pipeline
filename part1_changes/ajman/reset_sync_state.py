@@ -26,7 +26,7 @@
 
 # COMMAND ----------
 
-dbutils.widgets.text("SCOPE", "ALL", "Scope to reset (or ALL)")
+dbutils.widgets.dropdown("SCOPE", "ALL", ["ALL", "Scholarly Activities", "Grants"], "Scope to reset (or ALL)")
 scope_widget = dbutils.widgets.get("SCOPE")
 
 scopes_to_reset = list(SYNC_STATE_TABLES.keys()) if scope_widget == "ALL" else [scope_widget]
