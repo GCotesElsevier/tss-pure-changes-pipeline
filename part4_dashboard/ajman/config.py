@@ -87,20 +87,6 @@ COVERAGE_MAX_LOOKBACK_DAYS = 30
 
 DELIVERY_LOG_TABLE = "dashboard_delivery_log"
 
-# Timezone for RUN_TS (build_dashboard.py) -- the "now" used for
-# coverage_end/delivery_date in the report and for the delivered_at row
-# written to dashboard_delivery_log. Pinned instead of relying on the
-# Databricks cluster's own clock/timezone: 2026-09-11 the cluster had
-# already rolled over to the next calendar day while it was still the 10th
-# for the person running it, so a same-day run showed a 1-day-wide coverage
-# window instead of "same day". Ajman's own timezone, not whoever happens
-# to run this or which cluster it lands on — a client report's date should
-# read as the client's calendar day, and it stays correct once Part 1 runs
-# in the background (see project_hbku_on_demand_delivery_design, memory):
-# RUN_TS is computed once, when Part 4 itself runs, independent of how many
-# times Part 1 polled beforehand.
-REPORT_TIMEZONE = "Asia/Dubai"
-
 # The internal FAR type "Other" IS "Other Scholarly Work" on the FAR side
 # (TSSH-1087) — the report shows the client-facing label.
 FAR_TYPE_DISPLAY = {

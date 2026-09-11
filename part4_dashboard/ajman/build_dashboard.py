@@ -65,8 +65,7 @@
 
 import logging
 import sys
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from datetime import date, datetime
 
 import pandas as pd
 
@@ -83,13 +82,7 @@ handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)
 logger.addHandler(handler)
 logger.propagate = False
 
-# Pinned to REPORT_TIMEZONE (config.py) instead of datetime.now() -- the
-# cluster's own clock/timezone otherwise decides what "today" means for the
-# report, which doesn't necessarily match the client's calendar day (see
-# config.py's comment on REPORT_TIMEZONE). Stays a naive datetime after
-# stripping tzinfo, same shape .strftime()/pd.Timestamp() calls elsewhere in
-# this file already expect -- only the VALUE it holds changes, not its type.
-RUN_TS = datetime.now(ZoneInfo(REPORT_TIMEZONE)).replace(tzinfo=None)
+RUN_TS = datetime.now()
 
 # COMMAND ----------
 
@@ -591,10 +584,8 @@ def run_scope(scope: str) -> None:
     logger.info("Uploaded %s dashboard report to %s", scope, remote_path)
 
     # --- record the delivery (append-only), only after a successful upload ---
-    # run_date derived from RUN_TS itself (not a separate date.today() call)
-    # so both columns always agree -- same REPORT_TIMEZONE, one source.
     spark.createDataFrame(
-        [(scope, RUN_TS, RUN_TS.date())],
+        [(scope, RUN_TS, date.today())],
         schema="scope STRING, delivered_at TIMESTAMP, run_date DATE",
     ).write.mode("append").option("mergeSchema", "true").saveAsTable(f"{DATABASE}.{DELIVERY_LOG_TABLE}")
     logger.info("Appended delivery-log row for %s (delivered_at=%s)", scope, RUN_TS)
