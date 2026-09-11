@@ -6,11 +6,13 @@
   endpoint has no server-side filter for family or `changeType`). Also
   provides `dedupe_last_event_per_uuid`, which collapses multiple events for
   the same record within a batch into the last one, per Pure's own guidance.
-- `sync_state.py` — persists the single **global** `resumptionToken` between
-  runs in a one-row control table (`get_last_resumption_token` /
-  `save_resumption_token`). The token is global, not per scope, because it
-  is a position in Pure's one shared changes stream and a single pipeline
-  run processes every scope at once.
+- `sync_state.py` — persists the `resumptionToken` between runs
+  (`get_last_resumption_token` / `save_resumption_token`). The control table
+  is append-only history: one row per save with an increasing `id`; each run
+  reads the newest row and appends a new one (`updated_at` = save time,
+  `run_date` = run date), so there is an audit trail of which token was
+  active from when. Called once per scope with its own `table_name` (both
+  clients keep a per-scope control table).
 - `hbku/config.py` — HBKU-specific secrets and constants (legacy API key,
   base URL, target database, sync-state table name, default start date).
 - `cfgs/HBKU_cfg_changes.py` — scope -> Pure family homologation
@@ -29,9 +31,11 @@
   for recent activity, without paging the full changes stream. Used to tell
   whether the absence of `Award` events in `discover_families.py` is due to
   low volume rather than a wrong family name.
-- `hbku/reset_sync_state.py` — dev utility: drops the resumptionToken
-  control table so the next `fetch_changes.py` run starts over from
-  `DEFAULT_SINCE_DATE`. Needed after a run's output got corrupted/lost even
+- `hbku/reset_sync_state.py` — dev utility: appends a reset row to the
+  resumptionToken control table pointing back at the scope's
+  `DEFAULT_SINCE_DATES` entry, so the next `fetch_changes.py` run resumes
+  from there. It no longer drops the table — the history rows are kept as
+  an audit trail. Needed after a run's output got corrupted/lost even
   though the events were already consumed from the stream (see the Arrow
   bug below) — resuming normally would skip those events forever, since
   the changes stream can't replay a range twice. Not for routine use.
@@ -56,10 +60,10 @@
    the `discover_families.py` window either (only `ExternalOrganisation`
    did) — irrelevant to Part 1's 3 scopes, but worth remembering for Part 2,
    since internal org changes may not surface reliably through this stream.
-2. ~~Resumption token persistence.~~ **Resolved:** a single global token is
-   persisted in `<DATABASE>.<SYNC_STATE_TABLE>` (see `sync_state.py`) and
-   only advanced after every scope's output table for the current run has
-   been saved successfully.
+2. ~~Resumption token persistence.~~ **Resolved:** a per-scope token is
+   persisted in `<DATABASE>.<SYNC_STATE_TABLE>` (see `sync_state.py`, now an
+   append-only history table) and only advanced after that scope's output
+   table for the current run has been saved successfully.
 3. **Output table name/schema.** `changes_<scope_slug>_<date>` in
    `fetch_changes.py` is a placeholder. The real destination shape should be
    decided together with Part 2, since that is what actually consumes it.
