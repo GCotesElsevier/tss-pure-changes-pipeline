@@ -179,6 +179,38 @@ pure_api = PureAPI(base_url=API_URL, api_key=API_KEY)
 
 # COMMAND ----------
 
+_INVALID_UUID_TOKENS = {"", "nan", "none", "null", "<na>"}
+
+
+def _is_invalid_uuid(value) -> bool:
+    if value is None:
+        return True
+    return str(value).strip().lower() in _INVALID_UUID_TOKENS
+
+
+def _drop_invalid_uuid_rows(df: pd.DataFrame, scope_slug: str) -> pd.DataFrame:
+    """
+    Defensive filter against a known data-quality issue (2026-09-11): a
+    malformed /changes event with no uuid has nothing to fetch/enrich, and
+    fetch_records_parallel would otherwise try to GET it from Pure as a
+    literal uuid (e.g. the string "NaN") and fail every time.
+    changes_client.py now skips these at the source going forward, but this
+    stays here too as a second line of defense (an already-persisted
+    changes_<scope>_<date> table written before that fix, or any other
+    future way a bad uuid could slip in).
+    """
+    if df.empty or "uuid" not in df.columns:
+        return df
+    invalid_mask = df["uuid"].map(_is_invalid_uuid)
+    if invalid_mask.any():
+        logger.error(
+            "[%s] %d row(s) in today's changes table have no valid uuid — excluded before "
+            "fetching: %s",
+            scope_slug, int(invalid_mask.sum()), df.loc[invalid_mask].to_dict("records"),
+        )
+    return df[~invalid_mask].reset_index(drop=True)
+
+
 def read_changes_table(scope_slug: str) -> pd.DataFrame:
     """
     Reads today's changes_<scope>_<CURRENT_DAY> table written by Part 1's
@@ -190,16 +222,26 @@ def read_changes_table(scope_slug: str) -> pd.DataFrame:
     try:
         df = spark.table(table_name).toPandas()
         logger.info("[%s] read %d rows from %s", scope_slug, len(df), table_name)
-        return df
+        return _drop_invalid_uuid_rows(df, scope_slug)
     except Exception:
         logger.info("No changes table for %s today (%s) — treating as zero events.", scope_slug, table_name)
         return pd.DataFrame(columns=["uuid", "changeType", "familySystemName", "version"])
 
 
 def _fetch_with_retries(fetch_fn, item):
-    """Retries a single fetch_fn(item) call on failure (network hiccups,
-    Pure returning a transient error) before giving up — see
-    FETCH_RETRY_ATTEMPTS."""
+    """
+    Retries a single fetch_fn(item) call on failure (network hiccups, Pure
+    returning a transient error) before giving up — see
+    FETCH_RETRY_ATTEMPTS. A failure that persists through every retry
+    returns None instead of raising (changed 2026-09-11 — see
+    fetch_records_parallel's docstring): a single permanently-bad record
+    (e.g. a 404 for a uuid that will never resolve) used to blow up the
+    entire batch via future.result() re-raising in the main thread, wasting
+    every already-completed call — real production cost, ~9400/9717
+    research-output fetches thrown away for one bad uuid. Logged as ERROR
+    (not silently swallowed) so a genuine outage affecting most/all records
+    is still loud and visible in the run's logs.
+    """
     last_error = None
     for attempt in range(1, FETCH_RETRY_ATTEMPTS + 1):
         try:
@@ -212,7 +254,12 @@ def _fetch_with_retries(fetch_fn, item):
                     attempt, FETCH_RETRY_ATTEMPTS, item, e, FETCH_RETRY_BACKOFF_SECONDS,
                 )
                 time.sleep(FETCH_RETRY_BACKOFF_SECONDS)
-    raise last_error
+    logger.error(
+        "Fetch permanently failed for %r after %d attempts: %s — skipping this one record, "
+        "the rest of the batch continues.",
+        item, FETCH_RETRY_ATTEMPTS, last_error,
+    )
+    return None
 
 
 def fetch_records_parallel(fetch_fn, items: list, label: str, max_workers: int = FETCH_MAX_WORKERS,
@@ -224,9 +271,10 @@ def fetch_records_parallel(fetch_fn, items: list, label: str, max_workers: int =
     progress every `log_every` completions so a long batch (e.g. Scholarly
     Activities, thousands of records) visibly keeps moving instead of
     looking stuck. Each individual fetch is retried a few times (see
-    _fetch_with_retries) before a failure is allowed to abort the batch —
-    one transient timeout out of thousands of calls should not throw away
-    every already-completed one.
+    _fetch_with_retries) — a record that still fails after every retry
+    comes back as None in the result list instead of aborting the whole
+    batch; callers (process_research_output/process_grants) filter those
+    out before flatten_dataframe.
     """
     total = len(items)
     if total == 0:
@@ -307,6 +355,14 @@ def process_research_output(changes_rows: pd.DataFrame):
     raw_records = fetch_records_parallel(
         lambda uuid: pure_api.read_record("research-outputs", uuid), uuids, label="research-outputs"
     )
+    failed_count = sum(1 for r in raw_records if r is None)
+    if failed_count:
+        logger.error(
+            "[research-outputs] %d/%d record(s) permanently failed to fetch — excluded from "
+            "today's batch (see ERROR logs above for which uuids).",
+            failed_count, len(raw_records),
+        )
+    raw_records = [r for r in raw_records if r is not None]
     flat = flatten_dataframe(raw_records)
     result = apply_transforms(flat, RESEARCH_OUTPUT_TRANSFORM_CONFIG)
 
@@ -346,6 +402,14 @@ def process_grants(changes_rows: pd.DataFrame):
         changes_rows.to_dict("records"),
         label="grants",
     )
+    failed_count = sum(1 for r in merged_records if r is None)
+    if failed_count:
+        logger.error(
+            "[grants] %d/%d record(s) permanently failed to fetch — excluded from today's batch "
+            "(see ERROR logs above for which uuids).",
+            failed_count, len(merged_records),
+        )
+    merged_records = [r for r in merged_records if r is not None]
     flat = flatten_dataframe(merged_records)
     result = apply_transforms(flat, GRANTS_TRANSFORM_CONFIG, context={"external_organizations": external_orgs_df})
 

@@ -6,6 +6,13 @@
 # MAGIC `moreChanges` is `False` and returns every change event, optionally
 # MAGIC filtered client-side by `familySystemName` — the endpoint does not
 # MAGIC support server-side filtering by family or by `changeType`.
+# MAGIC
+# MAGIC An event with no `uuid` (seen once for Ajman 2026-09-11 — Pure
+# MAGIC returned a "ResearchOutput" event with everything else missing) is
+# MAGIC dropped here, not passed through: there is nothing to fetch without a
+# MAGIC uuid, and letting it flow downstream ended up writing the literal
+# MAGIC string `"NaN"` as a uuid (pandas 3.0 + Spark string conversion of a
+# MAGIC missing value), which Part 2 then tried to GET from Pure.
 
 # COMMAND ----------
 
@@ -64,15 +71,35 @@ class PureChangesClient:
             )
 
             for change in items:
-                if families is None or change.get("familySystemName") in families:
-                    all_events.append(
-                        {
-                            "uuid": change.get("uuid"),
-                            "changeType": change.get("changeType"),
-                            "familySystemName": change.get("familySystemName"),
-                            "version": change.get("version"),
-                        }
+                if families is not None and change.get("familySystemName") not in families:
+                    continue
+                uuid = change.get("uuid")
+                if not uuid:
+                    # A genuinely malformed/incomplete event from Pure (seen
+                    # 2026-09-11: familySystemName populated, uuid/changeType/
+                    # version all missing) -- there is no record to fetch
+                    # without a uuid, so this is dropped here instead of
+                    # flowing downstream as a row Part 2 will try to enrich.
+                    # Left unfiltered, it used to reach changes_<scope>_<date>
+                    # with uuid=None; pandas 3.0's astype(str) doesn't safely
+                    # stringify that missing value (leaves a real float NaN
+                    # inside a nominally string column), and Spark then wrote
+                    # it out as the literal string "NaN" -- which Part 2 then
+                    # tried to GET as if it were a real uuid.
+                    logger.warning(
+                        "Skipping a /changes event with no uuid (familySystemName=%r, changeType=%r) -- "
+                        "malformed/incomplete event from Pure, nothing to enrich.",
+                        change.get("familySystemName"), change.get("changeType"),
                     )
+                    continue
+                all_events.append(
+                    {
+                        "uuid": uuid,
+                        "changeType": change.get("changeType"),
+                        "familySystemName": change.get("familySystemName"),
+                        "version": change.get("version"),
+                    }
+                )
 
             if not more_changes:
                 break
