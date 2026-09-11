@@ -63,6 +63,19 @@
 # MAGIC Intermediate tables use a `_remediation_<today>` suffix (today = the day
 # MAGIC this notebook actually runs, not either source date) — never overwrites
 # MAGIC `far_results_editorial_*` / `far_results_other_*` / any real daily table.
+# MAGIC
+# MAGIC ## Real bug found and fixed 2026-09-11: literal "NaN" text in the "new" group
+# MAGIC `enriched_research_output_20260723` (the initial-load snapshot -- predates
+# MAGIC this repo's own `safe_save_table` NaN-handling fixes and/or carries the
+# MAGIC issue over from `ip-pure2far-integration`'s `processed_researchoutputs_20260723`,
+# MAGIC which it was built from) has some missing values stored as the literal
+# MAGIC text `"NaN"`/`"nan"` instead of a real NULL. Confirmed present ONLY in the
+# MAGIC "new" group (rebuilt from 07-23) and NOT in "updates" (rebuilt from
+# MAGIC 08-14, which went through the regular, already-fixed pipeline) -- a
+# MAGIC one-off data quality issue in that specific frozen snapshot, not an
+# MAGIC active bug in this repo's current code. `_clean_literal_nan()` scrubs it
+# MAGIC defensively right after the rebuild, before the count validation and
+# MAGIC before anything is saved/uploaded.
 
 # COMMAND ----------
 
@@ -273,6 +286,32 @@ results_814, collabs_814 = rebuild_as_other(enriched_main["20260814"], enriched_
 
 combined_results = pd.concat([results_723, results_814], ignore_index=True)
 combined_collaborators = pd.concat([collabs_723, collabs_814], ignore_index=True)
+
+# COMMAND ----------
+
+# Data quality fix: enriched_research_output_20260723 (the initial-load
+# snapshot) has some missing values stored as the literal text "NaN"/"nan"
+# instead of a real NULL -- see the module docstring's "Real bug found and
+# fixed 2026-09-11" note. Only affects records rebuilt from 07-23 ("new");
+# 08-14-sourced "updates" go through the regular, already-fixed pipeline and
+# come in clean, but this runs over both groups uniformly to be safe.
+
+
+def _clean_literal_nan(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    out = df.copy()
+    for col in out.columns:
+        is_literal_nan = out[col].astype(str).str.strip().str.lower() == "nan"
+        if is_literal_nan.any():
+            out.loc[is_literal_nan, col] = None
+    return out
+
+
+combined_results = _clean_literal_nan(combined_results)
+combined_collaborators = _clean_literal_nan(combined_collaborators)
+
+# COMMAND ----------
 
 deletes_source_df = enriched_deletes[LATEST_EDITORIAL_DATE]
 deletes_export_df = (
