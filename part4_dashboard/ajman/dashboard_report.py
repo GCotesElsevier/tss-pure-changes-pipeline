@@ -383,17 +383,6 @@ _JS_TEMPLATE = r"""
     if (leaves.length) leaves[leaves.length-1].gapAfter = groupGap;
     FAR_TYPES.forEach(t => { if (t.updated > 0) leaves.push({ id:'u-'+t.far_slug, value:t.updated, color: col(t.color_var), label:t.far, x:x3, w:230, group:'u' }); });
 
-    // Malformed /changes events (no valid uuid) -- a data-quality artifact,
-    // not part of the received/delivered/dropped accounting, so it's a
-    // small side flow of its own rather than a branch off "Total change
-    // events". Only rendered when MALFORMED_COUNT > 0 (see build_dashboard.py's
-    // split_malformed_events -- this should not happen on a normal run).
-    if (MALFORMED_COUNT > 0) {
-      if (leaves.length) leaves[leaves.length-1].gapAfter = groupGap;
-      columns[0].push({ id:'malformed', value: MALFORMED_COUNT, color: col('--status-notice'), labelLines:['Malformed','events'], x:x0, w:wCol });
-      leaves.push({ id:'excluded-malformed', value: MALFORMED_COUNT, color: col('--status-notice'), label:'Excluded — malformed event', x:x3, w:230, group:'x' });
-    }
-
     const links = [
       ['events','create'], ['events','update'], ['events','delete'],
       ['create','c-drop'], ['create','c-del'],
@@ -415,6 +404,30 @@ _JS_TEMPLATE = r"""
         y += h + (n.gapAfter !== undefined ? n.gapAfter : leafGap);
       });
     });
+
+    // Malformed /changes events (no valid uuid) -- a data-quality artifact,
+    // not part of the received/delivered/dropped accounting. Placed as its
+    // OWN row, pinned below every other node (source and target share the
+    // same y-band) instead of joining columns[0]/leaves' per-column
+    // stacking -- a source-to-leaf ribbon spans the full diagram width, and
+    // stacking it alongside "Total change events" (near the top) made that
+    // long ribbon cut across the delete/retracted band in the middle. Only
+    // added when MALFORMED_COUNT > 0 (see build_dashboard.py's
+    // split_malformed_events -- this should not happen on a normal run).
+    if (MALFORMED_COUNT > 0) {
+      const bottomY = Math.max(...Object.values(nodes).map(n => n.y1));
+      const mfY0 = bottomY + bigGap;
+      const mfH = Math.max(minH, MALFORMED_COUNT * k);
+      const mfColor = col('--status-notice');
+      nodes['malformed'] = {
+        id:'malformed', value: MALFORMED_COUNT, color: mfColor, labelLines:['Malformed','events'],
+        x:x0, w:wCol, y0:mfY0, y1:mfY0+mfH,
+      };
+      nodes['excluded-malformed'] = {
+        id:'excluded-malformed', value: MALFORMED_COUNT, color: mfColor, label:'Excluded — malformed event',
+        x:x3, w:230, y0:mfY0, y1:mfY0+mfH,
+      };
+    }
 
     function ribbon(x1,y1a,y1b,x2,y2a,y2b,color,opacity) {
       const mx = (x1+x2)/2;
@@ -458,11 +471,10 @@ _JS_TEMPLATE = r"""
 
     const nNodes = leaves.filter(n => n.group === 'n').map(n => nodes[n.id]);
     const uNodes = leaves.filter(n => n.group === 'u').map(n => nodes[n.id]);
-    const xNodes = leaves.filter(n => n.group === 'x').map(n => nodes[n.id]);
     const leafCX = x3 + 115;
     if (nNodes.length) out += `<text class="sankey-group-label" x="${leafCX}" y="${nNodes[0].y0 - 16}" text-anchor="middle" style="fill:${col('--status-good')}">New &mdash; by FAR type</text>`;
     if (uNodes.length) out += `<text class="sankey-group-label" x="${leafCX}" y="${uNodes[0].y0 - 16}" text-anchor="middle" style="fill:${col('--brand-blue')}">Updated &mdash; by FAR type</text>`;
-    if (xNodes.length) out += `<text class="sankey-group-label" x="${leafCX}" y="${xNodes[0].y0 - 16}" text-anchor="middle" style="fill:${col('--status-notice')}">Data quality</text>`;
+    if (nodes['excluded-malformed']) out += `<text class="sankey-group-label" x="${leafCX}" y="${nodes['excluded-malformed'].y0 - 16}" text-anchor="middle" style="fill:${col('--status-notice')}">Data quality</text>`;
 
     const all = Object.values(nodes);
     const maxX = Math.max(...all.map(n => n.x + n.w)) + 28;

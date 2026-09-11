@@ -221,24 +221,6 @@ def split_malformed_events(changes_df: pd.DataFrame) -> tuple:
     return changes_df[~malformed_mask].reset_index(drop=True), changes_df[malformed_mask].reset_index(drop=True)
 
 
-def build_malformed_events(malformed_df: pd.DataFrame) -> list:
-    """Record-level rows for the report table + JSON for the Sankey branch."""
-    events = []
-    for _, r in malformed_df.iterrows():
-        family = r.get("familySystemName")
-        family = str(family) if family is not None and str(family).strip().lower() not in _INVALID_UUID_TOKENS else "unknown"
-        raw_uuid = r.get("uuid")
-        events.append({
-            "name": "", "fid": "",
-            "title": f"Malformed /changes event (familySystemName={family})",
-            "titleMissing": False,
-            "uuid": str(raw_uuid) if raw_uuid is not None else "",
-            "subtypePure": "", "subtypeFar": "",
-            "event": "malformed", "outcome": "excluded_malformed",
-        })
-    return events
-
-
 def build_dropped_list(scope: str, enriched_df: pd.DataFrame, subtype_to_type: dict, delivered_uuids: set) -> pd.DataFrame:
     """Non-delete records that changed but produced no FAR row at all."""
     cols = ["uuid", "changeType", "subtype_pure", "subtype_far", "title"]
@@ -263,16 +245,13 @@ def build_dropped_list(scope: str, enriched_df: pd.DataFrame, subtype_to_type: d
 # COMMAND ----------
 
 # --- record-level table (one row per record × internal participant, + deletes) ---
-# "malformed" (build_malformed_events) has no real Pure changeType — the
-# event never carried one — so it isn't keyed off changeType like the rest.
-EVENT_LABEL = {"CREATE": "New", "UPDATE": "Updated", "DELETE": "Deleted", "malformed": "Malformed"}
+EVENT_LABEL = {"CREATE": "New", "UPDATE": "Updated", "DELETE": "Deleted"}
 EVENT_SLUG = {"CREATE": "new", "UPDATE": "updated", "DELETE": "deleted"}
 OUTCOME_LABEL = {
     "delivered": "Delivered",
     "retracted": "Retracted from FAR",
     "dropped_no_fid": "Dropped - no Faculty ID match",
     "dropped_no_internal": "Dropped - no internal participant",
-    "excluded_malformed": "Excluded - malformed event",
 }
 STATUS_MAP = {"CREATE": "new", "UPDATE": "update", "DELETE": "delete"}
 
@@ -486,9 +465,10 @@ def run_scope(scope: str) -> None:
     if not dropped_list_df.empty:
         dropped_by_ct = {str(k): int(v) for k, v in dropped_list_df.groupby("changeType").size().items()}
 
+    # Malformed events are NOT added to `records` — the user asked for them
+    # to show up in the Sankey only, not clutter the record-level table
+    # (they carry no faculty/title/subtype information worth a row anyway).
     records = build_records(scope, enriched_df, authors_df, deletes_df, subtype_to_type, delivered_pairs)
-    malformed_events = build_malformed_events(malformed_df)
-    records = records + malformed_events
     subtypes_list = build_subtypes(scope, delivered_df, enriched_df)
 
     # --- reconciliation identities ---
@@ -595,7 +575,7 @@ def run_scope(scope: str) -> None:
         "match_rate": match_rate,
         "subtypes": subtypes_list,
         "records": records,
-        "malformed_count": len(malformed_events),
+        "malformed_count": len(malformed_df),
     }
 
     report_html = render_report_html(context, scope)
