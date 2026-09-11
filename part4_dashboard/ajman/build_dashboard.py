@@ -186,6 +186,59 @@ def build_delivered_frame(far_results: dict, slug_to_type: dict) -> pd.DataFrame
     return pd.concat(frames, ignore_index=True)
 
 
+_INVALID_UUID_TOKENS = {"", "nan", "none", "null", "<na>"}
+
+
+def _is_invalid_uuid(value) -> bool:
+    """
+    Same check as part2_enrichment/ajman/enrich_changes.py's
+    _is_invalid_uuid (own copy, per this repo's per-part self-contained
+    convention). Catches a malformed /changes event that reached
+    changes_<scope>_<date> with no real uuid (seen 2026-09-11 — see
+    project_ajman_fix_nan_uuid_crash_20260911, memory) — Part 1/2 now filter
+    these before enrichment, but Part 4 reads the RAW changes table
+    independently, so it detects the same condition on its own instead of
+    depending on that fix having run.
+    """
+    if value is None:
+        return True
+    return str(value).strip().lower() in _INVALID_UUID_TOKENS
+
+
+def split_malformed_events(changes_df: pd.DataFrame) -> tuple:
+    """
+    Splits changes_<scope>_<date> into (valid_df, malformed_df). A
+    malformed row (no real uuid) is excluded from every metric/KPI computed
+    from `valid_df` — it was never a real, actionable Pure change — and
+    reported separately (Sankey branch + record-level table row) ONLY when
+    at least one exists this run.
+    """
+    if changes_df.empty or "uuid" not in changes_df.columns:
+        return changes_df, pd.DataFrame(columns=changes_df.columns)
+    malformed_mask = changes_df["uuid"].map(_is_invalid_uuid)
+    if not malformed_mask.any():
+        return changes_df, pd.DataFrame(columns=changes_df.columns)
+    return changes_df[~malformed_mask].reset_index(drop=True), changes_df[malformed_mask].reset_index(drop=True)
+
+
+def build_malformed_events(malformed_df: pd.DataFrame) -> list:
+    """Record-level rows for the report table + JSON for the Sankey branch."""
+    events = []
+    for _, r in malformed_df.iterrows():
+        family = r.get("familySystemName")
+        family = str(family) if family is not None and str(family).strip().lower() not in _INVALID_UUID_TOKENS else "unknown"
+        raw_uuid = r.get("uuid")
+        events.append({
+            "name": "", "fid": "",
+            "title": f"Malformed /changes event (familySystemName={family})",
+            "titleMissing": False,
+            "uuid": str(raw_uuid) if raw_uuid is not None else "",
+            "subtypePure": "", "subtypeFar": "",
+            "event": "malformed", "outcome": "excluded_malformed",
+        })
+    return events
+
+
 def build_dropped_list(scope: str, enriched_df: pd.DataFrame, subtype_to_type: dict, delivered_uuids: set) -> pd.DataFrame:
     """Non-delete records that changed but produced no FAR row at all."""
     cols = ["uuid", "changeType", "subtype_pure", "subtype_far", "title"]
@@ -210,13 +263,16 @@ def build_dropped_list(scope: str, enriched_df: pd.DataFrame, subtype_to_type: d
 # COMMAND ----------
 
 # --- record-level table (one row per record × internal participant, + deletes) ---
-EVENT_LABEL = {"CREATE": "New", "UPDATE": "Updated", "DELETE": "Deleted"}
+# "malformed" (build_malformed_events) has no real Pure changeType — the
+# event never carried one — so it isn't keyed off changeType like the rest.
+EVENT_LABEL = {"CREATE": "New", "UPDATE": "Updated", "DELETE": "Deleted", "malformed": "Malformed"}
 EVENT_SLUG = {"CREATE": "new", "UPDATE": "updated", "DELETE": "deleted"}
 OUTCOME_LABEL = {
     "delivered": "Delivered",
     "retracted": "Retracted from FAR",
     "dropped_no_fid": "Dropped - no Faculty ID match",
     "dropped_no_internal": "Dropped - no internal participant",
+    "excluded_malformed": "Excluded - malformed event",
 }
 STATUS_MAP = {"CREATE": "new", "UPDATE": "update", "DELETE": "delete"}
 
@@ -389,7 +445,13 @@ def run_scope(scope: str) -> None:
     logger.info("--- Part 4 dashboard: scope=%s ---", scope)
 
     # --- READ-ONLY reads of Part 1/2/3 output for today ---
-    changes_df = read_table(f"{cfg['changes_table']}_{CURRENT_DAY}")
+    changes_df, malformed_df = split_malformed_events(read_table(f"{cfg['changes_table']}_{CURRENT_DAY}"))
+    if not malformed_df.empty:
+        logger.error(
+            "[%s] %d malformed /changes event(s) detected (no valid uuid) — excluded from "
+            "'received' and reported separately in the dashboard: %s",
+            scope, len(malformed_df), malformed_df.to_dict("records"),
+        )
     enriched_df = read_table(f"{cfg['enriched_table']}_{CURRENT_DAY}")
     authors_df = read_table(f"{cfg['enriched_authors_table']}_{CURRENT_DAY}")
     deletes_df = read_table(f"{cfg['enriched_deletes_table']}_{CURRENT_DAY}")
@@ -425,6 +487,8 @@ def run_scope(scope: str) -> None:
         dropped_by_ct = {str(k): int(v) for k, v in dropped_list_df.groupby("changeType").size().items()}
 
     records = build_records(scope, enriched_df, authors_df, deletes_df, subtype_to_type, delivered_pairs)
+    malformed_events = build_malformed_events(malformed_df)
+    records = records + malformed_events
     subtypes_list = build_subtypes(scope, delivered_df, enriched_df)
 
     # --- reconciliation identities ---
@@ -479,7 +543,7 @@ def run_scope(scope: str) -> None:
     # dashboard_records_<date> — persisted form of the record-level table
     records_table_rows = []
     for r in records:
-        ev_code = {"new": "CREATE", "updated": "UPDATE", "deleted": "DELETE"}[r["event"]]
+        ev_code = {"new": "CREATE", "updated": "UPDATE", "deleted": "DELETE"}.get(r["event"], r["event"])
         records_table_rows.append({
             "scope": scope,
             "faculty_member": r["name"],
@@ -488,7 +552,7 @@ def run_scope(scope: str) -> None:
             "pure_uuid": r["uuid"],
             "subtype_pure": r["subtypePure"],
             "subtype_far": r["subtypeFar"],
-            "event_type": EVENT_LABEL[ev_code],
+            "event_type": EVENT_LABEL.get(ev_code, ev_code),
             "outcome": OUTCOME_LABEL[r["outcome"]],
         })
     records_df = pd.DataFrame(
@@ -503,6 +567,11 @@ def run_scope(scope: str) -> None:
         safe_save_table(spark, logger, dropped_list_df.assign(scope=scope), f"dashboard_{scope}_dropped_{CURRENT_DAY}")
     else:
         logger.info("No silently-dropped records for %s today — no dashboard_%s_dropped table.", scope, scope)
+
+    # dashboard_<scope>_malformed_<date> — only created when it actually
+    # happens (see split_malformed_events); scope in the name, no upsert needed.
+    if not malformed_df.empty:
+        safe_save_table(spark, logger, malformed_df.assign(scope=scope), f"dashboard_{scope}_malformed_{CURRENT_DAY}")
 
     # --- coverage window (see config.py) ---
     coverage_start = compute_coverage_start(scope)
@@ -526,6 +595,7 @@ def run_scope(scope: str) -> None:
         "match_rate": match_rate,
         "subtypes": subtypes_list,
         "records": records,
+        "malformed_count": len(malformed_events),
     }
 
     report_html = render_report_html(context, scope)
@@ -545,6 +615,9 @@ def run_scope(scope: str) -> None:
     if not dropped_list_df.empty:
         print(f"\n{len(dropped_list_df)} record(s) silently dropped (no internal author resolved):")
         print(dropped_list_df.to_string(index=False))
+    if not malformed_df.empty:
+        print(f"\n{len(malformed_df)} malformed /changes event(s) detected today (see ERROR logs above):")
+        print(malformed_df.to_string(index=False))
     if not recon_ok:
         print(f"\n*** [{scope}] one or more reconciliation identities did NOT close — see WARNING logs above ***")
 

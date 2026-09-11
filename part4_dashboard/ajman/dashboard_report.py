@@ -207,11 +207,14 @@ _CSS = """
   .chip-dropped::before { background: var(--status-neutral); }
   .chip-retracted { background: var(--brand-blue-tint); color: var(--brand-blue); border-color: var(--brand-blue-border); }
   .chip-retracted::before { background: var(--brand-blue); }
+  .chip-malformed { background: var(--status-notice-tint); color: var(--status-notice); border-color: var(--status-notice-border); }
+  .chip-malformed::before { background: var(--status-notice); }
 
   .evt { display:inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; font-family:'Archivo',sans-serif; }
   .evt-new { background: var(--status-good-tint); color: var(--status-good); }
   .evt-updated { background: var(--brand-blue-tint); color: var(--brand-blue); }
   .evt-deleted { background: var(--neutral-chip-bg); color: var(--ink-secondary); }
+  .evt-malformed { background: var(--status-notice-tint); color: var(--status-notice); }
 
   .dash { color: var(--ink-muted); }
   .recon-footer { padding: 12px 20px; font-size: 12px; color: var(--ink-muted); border-top: 1px solid var(--border); background: var(--surface); }
@@ -286,7 +289,12 @@ _JS_TEMPLATE = r"""
   // by changeType.
   const DROPPED = __DROPPED_JSON__;
   const DELETES_DELIVERED = __DELETES_DELIVERED_JSON__;
-  // One row per (record x internal participant), plus delete rows.
+  // Malformed /changes events (no valid uuid) detected this run -- 0 on a
+  // normal run; only ever shown when it actually happens (see
+  // project_ajman_fix_nan_uuid_crash_20260911 in the repo's memory).
+  const MALFORMED_COUNT = __MALFORMED_COUNT_JSON__;
+  // One row per (record x internal participant), plus delete rows and any
+  // malformed-event rows.
   const RECORDS = __RECORDS_JSON__;
 
   const deliveredNew = SUBTYPES.reduce((a,s) => a + s.new, 0);
@@ -375,6 +383,17 @@ _JS_TEMPLATE = r"""
     if (leaves.length) leaves[leaves.length-1].gapAfter = groupGap;
     FAR_TYPES.forEach(t => { if (t.updated > 0) leaves.push({ id:'u-'+t.far_slug, value:t.updated, color: col(t.color_var), label:t.far, x:x3, w:230, group:'u' }); });
 
+    // Malformed /changes events (no valid uuid) -- a data-quality artifact,
+    // not part of the received/delivered/dropped accounting, so it's a
+    // small side flow of its own rather than a branch off "Total change
+    // events". Only rendered when MALFORMED_COUNT > 0 (see build_dashboard.py's
+    // split_malformed_events -- this should not happen on a normal run).
+    if (MALFORMED_COUNT > 0) {
+      if (leaves.length) leaves[leaves.length-1].gapAfter = groupGap;
+      columns[0].push({ id:'malformed', value: MALFORMED_COUNT, color: col('--status-notice'), labelLines:['Malformed','events'], x:x0, w:wCol });
+      leaves.push({ id:'excluded-malformed', value: MALFORMED_COUNT, color: col('--status-notice'), label:'Excluded — malformed event', x:x3, w:230, group:'x' });
+    }
+
     const links = [
       ['events','create'], ['events','update'], ['events','delete'],
       ['create','c-drop'], ['create','c-del'],
@@ -383,6 +402,7 @@ _JS_TEMPLATE = r"""
     ];
     FAR_TYPES.forEach(t => { if (t.new > 0) links.push(['c-del','n-'+t.far_slug]); });
     FAR_TYPES.forEach(t => { if (t.updated > 0) links.push(['u-del','u-'+t.far_slug]); });
+    if (MALFORMED_COUNT > 0) links.push(['malformed','excluded-malformed']);
 
     const greyRibbonTargets = new Set(['create','update','delete','c-drop','u-drop']);
 
@@ -438,9 +458,11 @@ _JS_TEMPLATE = r"""
 
     const nNodes = leaves.filter(n => n.group === 'n').map(n => nodes[n.id]);
     const uNodes = leaves.filter(n => n.group === 'u').map(n => nodes[n.id]);
+    const xNodes = leaves.filter(n => n.group === 'x').map(n => nodes[n.id]);
     const leafCX = x3 + 115;
     if (nNodes.length) out += `<text class="sankey-group-label" x="${leafCX}" y="${nNodes[0].y0 - 16}" text-anchor="middle" style="fill:${col('--status-good')}">New &mdash; by FAR type</text>`;
     if (uNodes.length) out += `<text class="sankey-group-label" x="${leafCX}" y="${uNodes[0].y0 - 16}" text-anchor="middle" style="fill:${col('--brand-blue')}">Updated &mdash; by FAR type</text>`;
+    if (xNodes.length) out += `<text class="sankey-group-label" x="${leafCX}" y="${xNodes[0].y0 - 16}" text-anchor="middle" style="fill:${col('--status-notice')}">Data quality</text>`;
 
     const all = Object.values(nodes);
     const maxX = Math.max(...all.map(n => n.x + n.w)) + 28;
@@ -455,8 +477,9 @@ _JS_TEMPLATE = r"""
     retracted:           { cls: 'chip-retracted', txt: 'Retracted from FAR' },
     dropped_no_fid:      { cls: 'chip-dropped',   txt: 'Dropped — no Faculty ID match' },
     dropped_no_internal: { cls: 'chip-dropped',   txt: 'Dropped — no internal participant' },
+    excluded_malformed:  { cls: 'chip-malformed', txt: 'Excluded — malformed event' },
   };
-  const EVT_META = { new: ['evt-new','New'], updated: ['evt-updated','Updated'], deleted: ['evt-deleted','Deleted'] };
+  const EVT_META = { new: ['evt-new','New'], updated: ['evt-updated','Updated'], deleted: ['evt-deleted','Deleted'], malformed: ['evt-malformed','Malformed'] };
 
   function esc(s) { return s === null || s === undefined ? '' : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
@@ -591,11 +614,18 @@ def render_report_html(context: dict, scope: str) -> str:
       subtypes      -> [{"pure","far","far_slug","color_var","new","updated"}]
       records       -> [{"name","fid","title","titleMissing","uuid",
                          "subtypePure","subtypeFar","event","outcome"}]
+      malformed_count -> int, 0 on a normal run (see
+                         project_ajman_fix_nan_uuid_crash_20260911, memory) —
+                         when > 0 the Sankey gets an extra "Data quality"
+                         branch and the record table an "Malformed"/
+                         "Excluded — malformed event" filter option; both
+                         stay entirely absent when it's 0.
     `scope` is "research_output" or "grants" (only used for the <title>).
     """
     received = context["received"]
     dropped = context.get("dropped", {})
     subtypes = context.get("subtypes", [])
+    malformed_count = int(context.get("malformed_count") or 0)
 
     received_total = sum(int(v or 0) for v in received.values())
     delivered_new = sum(int(s.get("new") or 0) for s in subtypes)
@@ -618,12 +648,27 @@ def render_report_html(context: dict, scope: str) -> str:
     scope_label = _esc(context.get("scope_label", scope))
     eyebrow = _esc(context.get("eyebrow", f"{scope_label} · Pure → FAR"))
 
+    # The "Malformed"/"Excluded — malformed event" filter options, and the
+    # extra sankey-note sentence, only exist in the markup at all when this
+    # run actually had one — never an always-there-but-empty affordance.
+    event_option_malformed = '<option value="malformed">Malformed</option>' if malformed_count else ""
+    outcome_option_malformed = (
+        '<option value="excluded_malformed">Excluded — malformed event</option>' if malformed_count else ""
+    )
+    sankey_note_malformed = (
+        f" {_fmt_int(malformed_count)} additional event(s) this run were malformed (Pure sent them "
+        "with no usable identifier) and are excluded from every count above — shown separately as "
+        "\"Data quality\" below, not part of the received/delivered/dropped totals."
+        if malformed_count else ""
+    )
+
     js = (
         _JS_TEMPLATE
         .replace("__SUBTYPES_JSON__", _json.dumps(subtypes))
         .replace("__RECEIVED_JSON__", _json.dumps({k: int(received.get(k, 0) or 0) for k in ("CREATE", "UPDATE", "DELETE")}))
         .replace("__DROPPED_JSON__", _json.dumps({k: int(dropped.get(k, 0) or 0) for k in ("CREATE", "UPDATE")}))
         .replace("__DELETES_DELIVERED_JSON__", _json.dumps(deletes_delivered))
+        .replace("__MALFORMED_COUNT_JSON__", _json.dumps(malformed_count))
         .replace("__RECORDS_JSON__", _json.dumps(context.get("records", [])))
     )
 
@@ -735,7 +780,7 @@ def render_report_html(context: dict, scope: str) -> str:
       <div class="sankey-note">
         Every change event is routed by its type. <b>Dropped</b> = the record changed in Pure but none of its participants
         resolve to an internal Faculty ID, so it is not delivered. Deletes pass straight through (1:1) as retractions.
-        Reconciliation: received = delivered + dropped, per event type.
+        Reconciliation: received = delivered + dropped, per event type.{sankey_note_malformed}
       </div>
     </div>
   </section>
@@ -772,6 +817,7 @@ def render_report_html(context: dict, scope: str) -> str:
                   <option value="new">New</option>
                   <option value="updated">Updated</option>
                   <option value="deleted">Deleted</option>
+                  {event_option_malformed}
                 </select>
               </th>
               <th data-key="outcome">Outcome<span class="sort-arrow">&updownarrow;</span>
@@ -780,6 +826,7 @@ def render_report_html(context: dict, scope: str) -> str:
                   <option value="delivered">Delivered</option>
                   <option value="dropped">Dropped</option>
                   <option value="retracted">Retracted</option>
+                  {outcome_option_malformed}
                 </select>
               </th>
             </tr>
