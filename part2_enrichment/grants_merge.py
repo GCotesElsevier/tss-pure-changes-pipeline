@@ -62,20 +62,40 @@ def find_linked_project_uuid(pure_api, award_uuid: str):
     return (cluster.get("project") or {}).get("uuid")
 
 
+# Top-level keys both *_cfg_transform_grants.py configs ONLY ever read in
+# suffixed form (title_project.en_US/title_award.en_US, pureId_project/
+# pureId_award, etc.) -- these exist on both Project's and Award's Pure
+# schema, so they must always be disambiguated by side even when the
+# record's OTHER side is missing entirely. Derived from grepping both
+# GRANTS_TRANSFORM_CONFIGs for every "_project"/"_award" suffixed field.
+ALWAYS_SUFFIXED_KEYS = {
+    "pureId", "uuid", "keywordGroups", "type", "version",
+    "descriptions", "title", "shortTitle", "typeDiscriminator", "visibility",
+}
+
+
 def merge_project_and_award(project: dict, award: dict) -> dict:
     """
     Merges a Project and its linked Award into one dict, suffixing any key
-    present on BOTH sides with `_project` / `_award` — mirrors
-    `pandas.merge(df_project, df_award, suffixes=("_project", "_award"))`,
-    which is the shape `HBKU_cfg_transform_grants.py` expects. Keys unique
-    to one side keep their original name.
+    present on BOTH sides -- or in `ALWAYS_SUFFIXED_KEYS` -- with
+    `_project` / `_award`. Mirrors `pandas.merge(df_project, df_award,
+    suffixes=("_project", "_award"))`, which is the shape
+    `*_cfg_transform_grants.py` expects, EXCEPT that a key in
+    `ALWAYS_SUFFIXED_KEYS` is suffixed even when only one side actually
+    has it. Keys unique to one side and not in that set keep their
+    original name (e.g. `participants` vs `awardHolders`).
 
     Either `project` or `award` can be `None` (e.g. a Project with no
-    linked Award yet).
+    linked Award yet) -- plain `set(project.keys()) & set(award.keys())`
+    then comes back empty even for a schema-shared field like `title`,
+    which is exactly the case that used to leave `title` unsuffixed and
+    silently unreadable by the transform config (found 2026-09-16
+    investigating "Title unavailable" on Ajman's Grants dashboard: most
+    Ajman Projects have no linked Award at all, not a rare edge case).
     """
     project = project or {}
     award = award or {}
-    shared_keys = set(project.keys()) & set(award.keys())
+    shared_keys = (set(project.keys()) & set(award.keys())) | ALWAYS_SUFFIXED_KEYS
 
     merged = {}
     for key, value in project.items():

@@ -236,7 +236,12 @@ def build_dropped_list(scope: str, enriched_df: pd.DataFrame, subtype_to_type: d
         dropped["subtype_pure"] = dropped["subtype"]
         dropped["subtype_far"] = dropped["subtype"].map(lambda s: _far_display(subtype_to_type.get(s, s)))
     else:
-        dropped["subtype_pure"] = "Award"
+        # Grants only ever has one FAR-side type ("Award" in
+        # FAR_TEMPLATES_CONFIG), but the PURE-side record can be either a
+        # Project or an Award change -- read the real value instead of
+        # assuming "Award" for both (found 2026-09-16: most Ajman Grants
+        # changes are Projects, not Awards).
+        dropped["subtype_pure"] = dropped["typeDisc"].fillna("Award") if "typeDisc" in dropped.columns else "Award"
         dropped["subtype_far"] = "Award"
     if "title" not in dropped.columns:
         dropped["title"] = None
@@ -269,7 +274,9 @@ def build_records(
             base["subtype_pure"] = enriched_df["subtype"]
             base["subtype_far"] = base["subtype_pure"].map(lambda s: _far_display(subtype_to_type.get(s, s)))
         else:
-            base["subtype_pure"] = "Award"
+            # See build_dropped_list's comment above -- same real
+            # Project/Award distinction instead of assuming "Award".
+            base["subtype_pure"] = enriched_df["typeDisc"].fillna("Award") if "typeDisc" in enriched_df.columns else "Award"
             base["subtype_far"] = "Award"
         nd = base[base["changeType"] != "DELETE"]
 
@@ -330,6 +337,14 @@ def build_subtypes(scope: str, delivered_df: pd.DataFrame, enriched_df: pd.DataF
         sub_lookup = enriched_df[["uuid", "subtype"]].rename(columns={"uuid": "uuid_output"})
         deliv = deliv.merge(sub_lookup, on="uuid_output", how="left")
         deliv["subtype"] = deliv["subtype"].fillna(deliv["far_type"])
+    elif not enriched_df.empty and "typeDisc" in enriched_df.columns:
+        # Same real Project/Award distinction as build_records/
+        # build_dropped_list, instead of assuming every Grants change is
+        # an "Award".
+        sub_lookup = enriched_df[["uuid", "typeDisc"]].rename(columns={"uuid": "uuid_output"})
+        deliv = deliv.merge(sub_lookup, on="uuid_output", how="left")
+        deliv["subtype"] = deliv["typeDisc"].fillna("Award")
+        deliv = deliv.drop(columns=["typeDisc"])
     else:
         deliv["subtype"] = "Award"
 
