@@ -72,6 +72,13 @@ def _upsert(spark, records: list, database: str, table_name: str, key_col: str =
 
     staging_view = f"_staging_{table_name}"
     spark_df.createOrReplaceTempView(staging_view)
+    # A `process_fn` that starts returning a new key (e.g. TSSH-1113 adding
+    # "type" to process_organization) would otherwise make this MERGE fail
+    # outright on the very next incremental run -- the existing target
+    # table doesn't have that column yet, and `UPDATE SET *`/`INSERT *`
+    # require the source/target schemas to match. Auto-merge lets Delta
+    # add the new column instead.
+    spark.conf.set("spark.databricks.delta.schema.autoMerge.enabled", "true")
     spark.sql(
         f"""
         MERGE INTO {full_table_name} AS target

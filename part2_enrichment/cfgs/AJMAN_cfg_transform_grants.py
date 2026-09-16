@@ -124,32 +124,62 @@ GRANTS_TRANSFORM_CONFIG = {
                 "value_column": "name",
                 "to": "sponsor",
             },
+            # TSSH-1113: FAR "Type of Funding" is derived from the funder
+            # organization's OWN classification type (e.g. "University"),
+            # not from its name -- see the "fundingType" entry below. Needs
+            # `process_organization` (entity_transforms.py) to actually
+            # capture a "type" column into sync_external_organizations;
+            # unvalidated against a real Ajman external-organisation
+            # payload (field name/shape assumed from the same
+            # "type.term.en_US" pattern already used elsewhere in this file).
+            {
+                "type": "lookup_from_dataframe",
+                "reference": "external_organizations",
+                "lookup_key": "uuid",
+                "value_column": "type",
+                "to": "funder_org_type",
+            },
         ]
     },
-    "fundingType": {
+    "funder_org_type": {
         "actions": [
             {"type": "add"},
-            {"type": "fill_from", "source": "sponsor"},
             {
                 "type": "map_values",
-                # TODO(user): HBKU's mapping listed ~20 real Qatar-based
-                # sponsor names it had seen — none of those apply to Ajman,
-                # so this starts EMPTY rather than carrying over wrong
-                # entries. Until populated with Ajman's real sponsors, every
-                # grant falls through to "default" below (same heritage
-                # fragility as HBKU: the sponsor's own name is used as the
-                # funding type verbatim, e.g. sponsor="Ministry of X" ->
-                # fundingType="Ministry of X") — not a crash, just unmapped.
-                "mapping": {},
-                "default": "__SELF__",
+                # TSSH-1113 AC1/AC2: a recognized funder org type passes
+                # through as-is; anything else (unmatched org, or an org
+                # with no type resolved) falls to "Other" -- never blank.
+                # Only "University" is confirmed so far; add more real
+                # values here as they're seen.
+                "mapping": {"University": "University"},
+                "default": "Other",
             },
+            {"type": "rename", "to": "fundingType"},
         ]
     },
 
     "type_award.term.en_US": {
+        # TSSH-1111 + TSSH-1114 (Ajman): both target FAR "Type of Grant",
+        # confirmed via real Ajman data (2026-09-16, enriched_grants_*) to
+        # be the SAME underlying Pure field -- besides the known research-
+        # methodology values below, a real record was seen with the raw
+        # value "Internal" (previously fell through unmapped via
+        # "__SELF__"). TSSH-1111 wants "Internal"/"External" mapped to a
+        # constant "Grants" + a separate "Classification" field
+        # (Internal Grants/External Grants); TSSH-1114 wants everything
+        # else to default to "Research" (confirmed with the user: a truly
+        # unrecognized value defaults to "Research" rather than being
+        # logged/flagged, overriding TSSH-1111 AC2's edge case on this
+        # point). "External" itself is not yet confirmed against real
+        # data -- only "Internal" has been observed.
         "actions": [
             {"type": "add"},
             {"type": "fill_from", "source": "type_project.term.en_US"},
+            # Copy the raw value into "classification" BEFORE it gets
+            # mapped below -- map_values/fill_from always write back into
+            # this same field, so the raw value has to be preserved
+            # elsewhere first.
+            {"type": "cast", "to_type": "string", "to": "classification"},
             {
                 "type": "map_values",
                 "mapping": {
@@ -157,10 +187,27 @@ GRANTS_TRANSFORM_CONFIG = {
                     "Applied Research": "Research",
                     "Basic Research": "Research",
                     "Others": "Research",
+                    "Internal": "Grants",
+                    "External": "Grants",
                 },
-                "default": "__SELF__",
+                "default": "Research",
             },
             {"type": "rename", "to": "grantType"},
+        ]
+    },
+    "classification": {
+        "actions": [
+            {"type": "add"},
+            {
+                "type": "map_values",
+                # Blank (not "Other"/"__SELF__") for every value that isn't
+                # Internal/External -- Classification only applies to
+                # TSSH-1111's Internal/External Grants distinction.
+                "mapping": {
+                    "Internal": "Internal Grants",
+                    "External": "External Grants",
+                },
+            },
         ]
     },
 
@@ -226,6 +273,21 @@ GRANTS_TRANSFORM_CONFIG = {
                 "else_value": "Project",
                 "treat_empty_string_as_null": True,
                 "to": "typeDisc",
+            },
+        ]
+    },
+    "fundedStatus": {
+        # TSSH-1112: FAR "Funded Status" from whether the record is an
+        # Award (Funded) or a Project (Not Funded). Copied from "typeDisc"
+        # via fill_from rather than mapped in place, so "typeDisc" itself
+        # stays intact for anything else that reads it (e.g. Part 4's
+        # dashboard subtype display).
+        "actions": [
+            {"type": "add"},
+            {"type": "fill_from", "source": "typeDisc"},
+            {
+                "type": "map_values",
+                "mapping": {"Award": "Funded", "Project": "Not Funded"},
             },
         ]
     },

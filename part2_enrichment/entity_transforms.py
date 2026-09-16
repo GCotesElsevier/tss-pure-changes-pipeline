@@ -87,4 +87,11 @@ def process_organization(data: dict, language: str) -> dict:
         "pureId": data["pureId"],
         "uuid": data["uuid"],
         "name": data["name"][language],
+        # TSSH-1113 (Ajman): funder org's own classification type (e.g.
+        # "University"), used to derive FAR "Type of Funding". Same
+        # {"term": {lang: ...}} shape process_event uses above for its own
+        # "type" field -- unvalidated against a real Ajman
+        # external-organisation payload. .get()-based throughout since an
+        # org with no type classified shouldn't break the whole sync.
+        "type": (data.get("type") or {}).get("term", {}).get(language),
     }

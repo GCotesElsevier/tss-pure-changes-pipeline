@@ -674,6 +674,11 @@ class Pure_Grants_Transformer(PureBaseTransformer):
             # out empty. Found 2026-07-23 while reconciling Ajman's initial
             # load against far_templates.py's actual column reads.
             "Type of Grant": self._get_col(df, "grantType"),
+            # TSSH-1111 (Ajman): Internal Grants / External Grants, blank
+            # for anything else.
+            "Classification": self._get_col(df, "classification"),
+            # TSSH-1112 (Ajman): Funded (Award) / Not Funded (Project).
+            "Funded Status": self._get_col(df, "fundedStatus"),
             "uuid_output": self._get_col(df, "uuid"),
         })
 
