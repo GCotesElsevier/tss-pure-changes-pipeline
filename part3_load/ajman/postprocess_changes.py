@@ -132,6 +132,36 @@ def type_table_suffix(type_name: str, type_slug_map: dict = None) -> str:
     return type_name.lower().replace(" ", "_").replace(":", "").replace("-", "_")
 
 
+def apply_ajman_grants_alignment(df_template: pd.DataFrame, df_all_data: pd.DataFrame, type_name: str) -> pd.DataFrame:
+    """
+    Ajman-only FAR columns that don't belong on the shared
+    far_templates.py template -- "Classification" (TSSH-1111) and
+    "Funded Status" (TSSH-1112) are specific to Ajman's FAR setup, not
+    part of every project's template. Same pattern HBKU already uses
+    (`apply_hbku_alignment` in `hbku/postprocess_changes.py`) to keep
+    per-project variations out of the shared template instead of adding
+    them to `far_templates.py` directly, which would put those columns
+    (permanently blank) into every OTHER project's CSV too -- confirmed
+    with the user 2026-09-16 after an earlier version of this fix did
+    exactly that against far_templates.py, caught before it reached
+    Databricks.
+    """
+    if type_name != "Award" or df_template.empty:
+        return df_template
+
+    df = df_template.copy()
+    by_uuid = df_all_data.drop_duplicates(subset="uuid").set_index("uuid")
+
+    def from_source(col):
+        if col not in by_uuid.columns:
+            return pd.Series([""] * len(df), index=df.index)
+        return df["uuid_output"].map(by_uuid[col]).fillna("")
+
+    df["Classification"] = from_source("classification")
+    df["Funded Status"] = from_source("fundedStatus")
+    return df
+
+
 def build_far_template(primary_df, type_name, transformer_cls, authors_df=None, subtype_filter_col="subtype"):
     """
     Builds df_all_data (one row per record x internal author) for one
@@ -168,6 +198,7 @@ def build_far_template(primary_df, type_name, transformer_cls, authors_df=None, 
         return pd.DataFrame()
 
     df_template = transformer_cls().build(df_all_data)
+    df_template = apply_ajman_grants_alignment(df_template, df_all_data, type_name)
 
     # changeType isn't a real FAR field -- attached here (by uuid, not by
     # position: .build() re-filters to internal rows internally too, so row
