@@ -51,11 +51,39 @@ def _get_since_datetime(spark, full_table_name: str, default_since_datetime: str
     return (max_ts - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _upsert(spark, records: list, database: str, table_name: str, key_col: str = "uuid") -> None:
+def _ensure_columns(spark, full_table_name: str, columns: list) -> None:
+    """
+    Adds any of `columns` missing from the existing target table, as
+    STRING, even when there are 0 records to upsert THIS run.
+
+    Needed because Delta's `autoMerge.enabled` (see `_upsert` below) only
+    evolves schema INSIDE a MERGE -- a run where the incremental pull finds
+    0 new/changed rows never reaches that MERGE at all, so a `process_fn`
+    that started returning a new key (e.g. TSSH-1113 adding "type" to
+    `process_organization`) would never actually land on the table until
+    the next run that happens to have ≥1 row. Found 2026-09-16 (QA of
+    Ajman's Grants run): `sync_external_organizations` had 0 rows to sync
+    that day, so "type" never arrived, and the very next step
+    (`enrich_changes.py`'s lookup against that column) crashed.
+    """
+    if not _table_exists(spark, full_table_name):
+        return
+    existing = set(spark.table(full_table_name).columns)
+    missing = [c for c in columns if c not in existing]
+    if not missing:
+        return
+    add_clause = ", ".join(f"`{c}` STRING" for c in missing)
+    spark.sql(f"ALTER TABLE {full_table_name} ADD COLUMNS ({add_clause})")
+
+
+def _upsert(spark, records: list, database: str, table_name: str, key_col: str = "uuid", expected_columns: list = None) -> None:
+    full_table_name = f"{database}.{table_name}"
+
+    if expected_columns:
+        _ensure_columns(spark, full_table_name, expected_columns)
+
     if not records:
         return
-
-    full_table_name = f"{database}.{table_name}"
 
     # All-string schema derived from the first record's keys — same
     # approach as `load_data_stage` in ip-pure2far-integration's utils.py,
@@ -103,6 +131,7 @@ def sync_entity(
     query_field: str,
     process_fn,
     default_since_datetime: str,
+    expected_columns: list = None,
 ) -> int:
     """
     Syncs one supporting entity end to end and returns the number of
@@ -115,6 +144,12 @@ def sync_entity(
     legacy API has no incremental query for that entity) or when the target
     table does not exist yet; otherwise pulls only the uuids created since
     the table's own last `ingest_ts` and re-fetches just those.
+
+    `expected_columns`, if given, is every column `process_fn` can ever
+    produce -- passed through to `_upsert`/`_ensure_columns` so the table
+    gains a new column even on a run with 0 records (see `_ensure_columns`'s
+    docstring). Only worth passing for an entity whose `process_fn` was
+    changed to return a new key after the table already exists.
     """
     full_table_name = f"{database}.{table_name}"
 
@@ -126,5 +161,5 @@ def sync_entity(
         raw_records = [pure_api.read_record(end_point, uuid) for uuid in uuids]
 
     processed_records = [process_fn(record) for record in raw_records]
-    _upsert(spark, processed_records, database, table_name)
+    _upsert(spark, processed_records, database, table_name, expected_columns=expected_columns)
     return len(processed_records)

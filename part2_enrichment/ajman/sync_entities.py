@@ -64,6 +64,16 @@ entities = [
     (EXTERNAL_ORG_TABLE, "external-organizations", "external-organisations", "externalOrganisationsQuery", process_organization),
 ]
 
+# Every column `process_fn` can produce, for any entity whose `process_fn`
+# started returning a new key AFTER its table already existed -- see
+# entity_sync.py's `_ensure_columns` docstring for why this is needed (a
+# run with 0 records for that entity would otherwise never add the new
+# column). TSSH-1113 added "type" to process_organization; found missing
+# 2026-09-16 when that day's org sync had 0 rows to upsert.
+EXPECTED_COLUMNS = {
+    EXTERNAL_ORG_TABLE: ["pureId", "uuid", "name", "type"],
+}
+
 for table_name, end_point, legacy_end_point, query_field, process_fn in entities:
     logger.info("Syncing %s...", table_name)
     count = sync_entity(
@@ -77,5 +87,6 @@ for table_name, end_point, legacy_end_point, query_field, process_fn in entities
         query_field=query_field,
         process_fn=lambda record, fn=process_fn: fn(record, LANGUAGE),
         default_since_datetime=DEFAULT_SINCE_DATETIME,
+        expected_columns=EXPECTED_COLUMNS.get(table_name),
     )
     logger.info("Synced %d records into %s.%s", count, DATABASE, table_name)
