@@ -76,17 +76,26 @@ EXPECTED_COLUMNS = {
 
 for table_name, end_point, legacy_end_point, query_field, process_fn in entities:
     logger.info("Syncing %s...", table_name)
-    count = sync_entity(
-        spark=spark,
-        pure_api=pure_api,
-        legacy_api=legacy_api,
-        database=DATABASE,
-        table_name=table_name,
-        end_point=end_point,
-        legacy_end_point=legacy_end_point,
-        query_field=query_field,
-        process_fn=lambda record, fn=process_fn: fn(record, LANGUAGE),
-        default_since_datetime=DEFAULT_SINCE_DATETIME,
-        expected_columns=EXPECTED_COLUMNS.get(table_name),
-    )
-    logger.info("Synced %d records into %s.%s", count, DATABASE, table_name)
+    try:
+        count = sync_entity(
+            spark=spark,
+            pure_api=pure_api,
+            legacy_api=legacy_api,
+            database=DATABASE,
+            table_name=table_name,
+            end_point=end_point,
+            legacy_end_point=legacy_end_point,
+            query_field=query_field,
+            process_fn=lambda record, fn=process_fn: fn(record, LANGUAGE),
+            default_since_datetime=DEFAULT_SINCE_DATETIME,
+            expected_columns=EXPECTED_COLUMNS.get(table_name),
+        )
+        logger.info("Synced %d records into %s.%s", count, DATABASE, table_name)
+    except Exception:
+        # One entity's sync failing (e.g. Pure legacy API access not yet
+        # granted for that content type -- found 2026-09-16, "Event") must
+        # not block the others. Each entity is independent: Grants only
+        # ever reads sync_external_organizations/sync_persons, Research
+        # Output is the only consumer of sync_events, so a stuck Event
+        # sync has no bearing on a Grants-only run.
+        logger.exception("Syncing %s FAILED -- skipping, continuing with the next entity.", table_name)
