@@ -78,15 +78,19 @@
 
 # COMMAND ----------
 
+# MAGIC %run ../../part2_enrichment/ajman/config
+
+# COMMAND ----------
+
+# MAGIC %run ../../part4_dashboard/ajman/config
+
+# COMMAND ----------
+
 # MAGIC %run ../../part2_enrichment/pure_api_client
 
 # COMMAND ----------
 
 # MAGIC %run ../../part2_enrichment/transform_engine
-
-# COMMAND ----------
-
-# MAGIC %run ../../part2_enrichment/far_users_client
 
 # COMMAND ----------
 
@@ -98,23 +102,31 @@
 
 # COMMAND ----------
 
-# MAGIC %run ../../part2_enrichment/ajman/config
-
-# COMMAND ----------
-
-# MAGIC %run ../../part2_enrichment/ajman/far_users_source
-
-# COMMAND ----------
-
 # MAGIC %run ../../part2_enrichment/cfgs/AJMAN_cfg_transform_grants
 
 # COMMAND ----------
 
-# MAGIC %run ../../part4_dashboard/ajman/config
+# MAGIC %run ../../part4_dashboard/ajman/dashboard_report
 
 # COMMAND ----------
 
-# MAGIC %run ../../part4_dashboard/ajman/dashboard_report
+# Both part2_enrichment/ajman/config.py and part4_dashboard/ajman/config.py
+# do `from datetime import datetime` (rebinding the global name `datetime`
+# to the CLASS), while far_users_client.py does `import datetime` (the
+# MODULE) and calls `datetime.datetime.utcnow()` internally -- %run shares
+# one flat namespace, so whichever import runs LAST wins. far_users_client
+# must run after BOTH ajman configs, right before it's actually used, or
+# get_email_to_faculty_id (2 cells below) breaks with
+# "type object 'datetime.datetime' has no attribute 'datetime'" -- hit for
+# real 2026-09-17 when this file's %run order had it the other way around.
+
+# COMMAND ----------
+
+# MAGIC %run ../../part2_enrichment/far_users_client
+
+# COMMAND ----------
+
+# MAGIC %run ../../part2_enrichment/ajman/far_users_source
 
 # COMMAND ----------
 
