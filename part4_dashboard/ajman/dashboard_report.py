@@ -133,7 +133,8 @@ _CSS = """
   .chart-caption { font-size: 12px; color: var(--ink-muted); margin-bottom: 16px; }
 
   .bar-chart { display:flex; flex-direction:column; gap: 12px; }
-  .bar-row { display:grid; grid-template-columns: 170px 1fr 54px; align-items:center; gap: 12px; }
+  .bar-row { display:grid; grid-template-columns: 170px 1fr 54px; align-items:center; gap: 12px; cursor: pointer; }
+  .bar-row:hover .bar-track { background: var(--baseline); }
   .bar-label { font-size: 12px; color: var(--ink-secondary); }
   .bar-track { position:relative; height: 14px; background: var(--gridline); border-radius: 3px; overflow:hidden; }
   .bar-fill { position:absolute; left:0; top:0; bottom:0; border-radius: 3px 0 0 3px; }
@@ -141,8 +142,10 @@ _CSS = """
 
   .donut-wrap { display:flex; align-items:center; gap: 20px; }
   .donut { width: 132px; height: 132px; border-radius: 50%; flex-shrink: 0; position: relative; }
-  .donut::after { content:""; position:absolute; inset: 22px; background: var(--surface-2); border-radius: 50%; }
-  .donut-center { position:absolute; inset:22px; display:flex; align-items:center; justify-content:center; flex-direction:column; }
+  .donut-svg { position:absolute; inset:0; width:100%; height:100%; }
+  .donut-seg { cursor: pointer; transition: opacity .12s ease; }
+  .donut-seg:hover { opacity: 0.82; }
+  .donut-center { position:absolute; inset:22px; display:flex; align-items:center; justify-content:center; flex-direction:column; pointer-events:none; }
   .donut-center b { font-family:'IBM Plex Mono',monospace; font-size: 15px; }
   .donut-center span { font-size: 10px; color: var(--ink-muted); text-transform:uppercase; letter-spacing:0.04em; }
   .donut-legend { display:flex; flex-direction:column; gap: 6px; font-size: 12.5px; flex: 1; }
@@ -153,9 +156,18 @@ _CSS = """
 
   .sankey-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 22px 26px 20px; overflow-x: auto; }
   .sankey-card svg { display:block; max-width: 100%; height:auto; margin: 0 auto; }
-  .sankey-node-label { font-family: 'Archivo', sans-serif; font-size: 11.5px; font-weight: 700; fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,0.38); stroke-width: 3px; stroke-linejoin: round; }
+  .sankey-node-label { font-family: 'Archivo', sans-serif; font-size: 11.5px; font-weight: 700; fill: #fff; paint-order: stroke; stroke: rgba(0,0,0,0.38); stroke-width: 3px; stroke-linejoin: round; pointer-events:none; }
   .sankey-node-label .sk-val { font-family: 'IBM Plex Mono', monospace; font-weight: 500; }
   .sankey-group-label { font-family: 'Archivo', sans-serif; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; fill: var(--ink-muted); }
+  .sankey-node { cursor: pointer; transition: opacity .12s ease; }
+  .sankey-node:hover { opacity: 0.85; }
+  .sankey-ribbon { cursor: pointer; transition: opacity .12s ease; }
+
+  .chart-tooltip { display:none; position:fixed; z-index:1000; max-width: 240px; background: var(--ink-primary); color: #fff; font-family:'Archivo',sans-serif; font-size: 12.5px; line-height:1.4; padding: 9px 12px; border-radius: 5px; box-shadow: 0 6px 18px rgba(0,0,0,0.22); pointer-events: none; }
+  .chart-tooltip .tt-title { font-weight: 600; margin-bottom: 3px; }
+  .chart-tooltip .tt-value { font-family:'IBM Plex Mono',monospace; font-size: 12.5px; }
+  .chart-tooltip .tt-pct { color: #C9CDD2; }
+  .chart-tooltip .tt-sub { color: #C9CDD2; margin-top: 2px; font-family:'IBM Plex Mono',monospace; font-size: 11.5px; }
 
   .recon-card { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .recon-toolbar { padding: 16px 20px; border-bottom: 1px solid var(--border); display:flex; align-items:center; gap: 14px; flex-wrap:wrap; background: var(--surface); }
@@ -272,12 +284,50 @@ def has_real_title(title) -> bool:
 # Client-side rendering + interaction, lifted from the approved mockup. Only
 # the data source changed: SUBTYPES / RECEIVED / DROPPED / DELETES_DELIVERED
 # / RECORDS are injected as JSON (real values from build_dashboard.py)
-# instead of the mockup's synthetic figures. Every layout/sort/filter/
-# paginate/Sankey routine below is byte-for-byte the mockup's.
+# instead of the mockup's synthetic figures. Layout/sort/filter/paginate are
+# byte-for-byte the mockup's; the donut/bar/Sankey chart hover tooltips are a
+# post-mockup addition (not in the approved artifact) -- see
+# project_ajman_dashboard_chart_tooltips_20260916 in the repo's memory.
 _JS_TEMPLATE = r"""
 <script>
   const cs = getComputedStyle(document.documentElement);
   const col = (v) => cs.getPropertyValue(v).trim();
+
+  // ---------- shared chart tooltip (donuts, bars, sankey) ----------
+  const tooltipEl = document.createElement('div');
+  tooltipEl.className = 'chart-tooltip';
+  document.body.appendChild(tooltipEl);
+  function moveTooltip(evt) {
+    const pad = 14;
+    let x = evt.clientX + pad, y = evt.clientY + pad;
+    const r = tooltipEl.getBoundingClientRect();
+    if (x + r.width > window.innerWidth - pad) x = evt.clientX - r.width - pad;
+    if (y + r.height > window.innerHeight - pad) y = evt.clientY - r.height - pad;
+    tooltipEl.style.left = x + 'px';
+    tooltipEl.style.top = y + 'px';
+  }
+  function showTooltip(evt, html) {
+    tooltipEl.innerHTML = html;
+    tooltipEl.style.display = 'block';
+    moveTooltip(evt);
+  }
+  function hideTooltip() { tooltipEl.style.display = 'none'; }
+  function ttShare(title, value, pct) {
+    return `<div class="tt-title">${esc(title)}</div><div class="tt-value">${Number(value).toLocaleString()}<span class="tt-pct"> (${Number(pct).toFixed(1)}%)</span></div>`;
+  }
+  // Jumps from a donut slice / bar row / Sankey node or ribbon to the
+  // record-level table below, set to exactly the records behind it.
+  // `renderTable`/the filter <select>s are defined further down in this
+  // script, but this only ever runs from a later click, once the whole
+  // script (and that section) has already run.
+  function applyChartFilter(filter) {
+    document.getElementById('facSearch').value = '';
+    document.getElementById('eventFilter').value = filter.event || 'all';
+    document.getElementById('outcomeFilter').value = filter.outcome || 'all';
+    document.getElementById('subtypeFilter').value = filter.subtypeFar || 'all';
+    renderTable(true);
+    document.querySelector('.recon-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 
   // DELIVERED distinct records per Pure subtype, split new / updated.
   const SUBTYPES = __SUBTYPES_JSON__;
@@ -307,15 +357,43 @@ _JS_TEMPLATE = r"""
   });
 
   // ---------- helper: build a donut + legend ----------
+  // Drawn as stacked SVG arc segments (not a CSS conic-gradient) so each
+  // slice is a real element that can carry its own hover tooltip with the
+  // absolute count behind the percentage.
   function buildDonut(donutId, legendId, rows) {
     const grand = rows.reduce((a,r) => a + r.value, 0) || 1;
     const donutEl = document.getElementById(donutId);
     const legendEl = document.getElementById(legendId);
+    const old = donutEl.querySelector('svg.donut-svg');
+    if (old) old.remove();
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const R = 55, C = 2 * Math.PI * R;
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('viewBox', '0 0 132 132');
+    svg.setAttribute('class', 'donut-svg');
     let cum = 0;
-    donutEl.style.background = `conic-gradient(${rows.map(r => {
-      const from = cum; cum += r.value / grand * 100;
-      return `${r.color} ${from.toFixed(2)}% ${cum.toFixed(2)}%`;
-    }).join(', ')})`;
+    rows.forEach(r => {
+      const frac = r.value / grand;
+      const dash = frac * C;
+      const seg = document.createElementNS(svgNS, 'circle');
+      seg.setAttribute('cx', '66'); seg.setAttribute('cy', '66'); seg.setAttribute('r', String(R));
+      seg.setAttribute('fill', 'none');
+      seg.setAttribute('stroke', r.color);
+      seg.setAttribute('stroke-width', '22');
+      seg.setAttribute('stroke-dasharray', `${dash.toFixed(2)} ${(C - dash).toFixed(2)}`);
+      seg.setAttribute('stroke-dashoffset', (-cum).toFixed(2));
+      seg.setAttribute('transform', 'rotate(-90 66 66)');
+      seg.classList.add('donut-seg');
+      if (frac > 0) {
+        seg.addEventListener('mouseenter', (e) => showTooltip(e, ttShare(r.label, r.value, frac * 100)));
+        seg.addEventListener('mousemove', moveTooltip);
+        seg.addEventListener('mouseleave', hideTooltip);
+        seg.addEventListener('click', () => { hideTooltip(); applyChartFilter(r.filter || {}); });
+      }
+      svg.appendChild(seg);
+      cum += dash;
+    });
+    donutEl.insertBefore(svg, donutEl.firstChild);
     legendEl.innerHTML = rows.map(r =>
       `<div class="lg-row"><span class="lg-swatch" style="background:${r.color}"></span><span class="lg-name">${r.label}</span><span class="lg-pct tnum">${(r.value/grand*100).toFixed(1)}%</span></div>`
     ).join('');
@@ -333,6 +411,14 @@ _JS_TEMPLATE = r"""
         <div class="bar-track"><div class="bar-fill" style="width:${(r.total/maxV*100).toFixed(1)}%; background:${col(r.color_var)};"></div></div>
         <div class="bar-value tnum">${r.total.toLocaleString()}</div>
       </div>`).join('');
+    chartEl.querySelectorAll('.bar-row').forEach((el, i) => {
+      const r = rows[i];
+      const html = `<div class="tt-title">${esc(r.far)}</div><div class="tt-value">${r.total.toLocaleString()} total</div><div class="tt-sub">${r.new.toLocaleString()} new &middot; ${r.updated.toLocaleString()} updated</div>`;
+      el.addEventListener('mouseenter', (e) => showTooltip(e, html));
+      el.addEventListener('mousemove', moveTooltip);
+      el.addEventListener('mouseleave', hideTooltip);
+      el.addEventListener('click', () => { hideTooltip(); applyChartFilter({ outcome: 'delivered', subtypeFar: r.far }); });
+    });
   })();
 
   // ---------- donut : share by FAR type ----------
@@ -341,15 +427,15 @@ _JS_TEMPLATE = r"""
     if (!nEl) return;
     nEl.textContent = FAR_TYPES.length;
     buildDonut('donut-far', 'donut-far-legend',
-      FAR_TYPES.map(f => ({ label: f.far, value: f.new + f.updated, color: col(f.color_var) }))
+      FAR_TYPES.map(f => ({ label: f.far, value: f.new + f.updated, color: col(f.color_var), filter: { outcome: 'delivered', subtypeFar: f.far } }))
                .sort((a,b) => b.value - a.value));
   })();
 
   // ---------- donut : share by event type ----------
   buildDonut('donut-evt', 'donut-evt-legend', [
-    { label: 'New',     value: RECEIVED.CREATE || 0, color: col('--status-good') },
-    { label: 'Updated', value: RECEIVED.UPDATE || 0, color: col('--brand-blue') },
-    { label: 'Deleted', value: RECEIVED.DELETE || 0, color: '#9AA0A6' },
+    { label: 'New',     value: RECEIVED.CREATE || 0, color: col('--status-good'), filter: { event: 'new' } },
+    { label: 'Updated', value: RECEIVED.UPDATE || 0, color: col('--brand-blue'), filter: { event: 'updated' } },
+    { label: 'Deleted', value: RECEIVED.DELETE || 0, color: '#9AA0A6', filter: { event: 'deleted' } },
   ]);
 
   // ---------- sankey : routed by change type ----------
@@ -369,22 +455,22 @@ _JS_TEMPLATE = r"""
     const x0 = 20, x1 = x0 + wCol + gapX, x2 = x1 + wCol + gapX, x3 = x2 + wCol + gapX;
 
     const columns = [
-      [ { id:'events', value: totalEvents, color: GREY_DARK, labelLines:['Total change','events'], x:x0, w:wCol } ],
-      [ { id:'create', value: RECEIVED.CREATE || 0, color: GREY_MID, labelLines:['New in','Pure'],     x:x1, w:wCol, gapAfter:bigGap },
-        { id:'update', value: RECEIVED.UPDATE || 0, color: GREY_MID, labelLines:['Updated in','Pure'], x:x1, w:wCol, gapAfter:bigGap },
-        { id:'delete', value: RECEIVED.DELETE || 0, color: GREY_MID, labelLines:['Deleted in','Pure'], x:x1, w:wCol } ],
-      [ { id:'c-drop', value: DROPPED.CREATE || 0, color: GREY_LIGHT, labelLines:['Dropped'], x:x2, w:wCol },
-        { id:'c-del',  value: deliveredNew,   color: col('--status-good'), labelLines:['Delivered','new'],   x:x2, w:wCol, gapAfter:bigGap },
-        { id:'u-drop', value: DROPPED.UPDATE || 0, color: GREY_LIGHT, labelLines:['Dropped'], x:x2, w:wCol },
-        { id:'u-del',  value: deliveredUpd,   color: col('--brand-blue'),  labelLines:['Delivered','updated'], x:x2, w:wCol, gapAfter:bigGap },
-        { id:'d-del',  value: DELETES_DELIVERED, color: col('--status-neutral'), labelLines:['Retracted','from FAR'], x:x2, w:wCol } ],
+      [ { id:'events', value: totalEvents, color: GREY_DARK, labelLines:['Total change','events'], x:x0, w:wCol, filter:{} } ],
+      [ { id:'create', value: RECEIVED.CREATE || 0, color: GREY_MID, labelLines:['New in','Pure'],     x:x1, w:wCol, gapAfter:bigGap, filter:{event:'new'} },
+        { id:'update', value: RECEIVED.UPDATE || 0, color: GREY_MID, labelLines:['Updated in','Pure'], x:x1, w:wCol, gapAfter:bigGap, filter:{event:'updated'} },
+        { id:'delete', value: RECEIVED.DELETE || 0, color: GREY_MID, labelLines:['Deleted in','Pure'], x:x1, w:wCol, filter:{event:'deleted'} } ],
+      [ { id:'c-drop', value: DROPPED.CREATE || 0, color: GREY_LIGHT, labelLines:['Dropped'], x:x2, w:wCol, filter:{event:'new', outcome:'dropped'} },
+        { id:'c-del',  value: deliveredNew,   color: col('--status-good'), labelLines:['Delivered','new'],   x:x2, w:wCol, gapAfter:bigGap, filter:{event:'new', outcome:'delivered'} },
+        { id:'u-drop', value: DROPPED.UPDATE || 0, color: GREY_LIGHT, labelLines:['Dropped'], x:x2, w:wCol, filter:{event:'updated', outcome:'dropped'} },
+        { id:'u-del',  value: deliveredUpd,   color: col('--brand-blue'),  labelLines:['Delivered','updated'], x:x2, w:wCol, gapAfter:bigGap, filter:{event:'updated', outcome:'delivered'} },
+        { id:'d-del',  value: DELETES_DELIVERED, color: col('--status-neutral'), labelLines:['Retracted','from FAR'], x:x2, w:wCol, filter:{event:'deleted', outcome:'retracted'} } ],
       []
     ];
 
     const leaves = columns[3];
-    FAR_TYPES.forEach(t => { if (t.new > 0) leaves.push({ id:'n-'+t.far_slug, value:t.new, color: col(t.color_var), label:t.far, x:x3, w:230, group:'n' }); });
+    FAR_TYPES.forEach(t => { if (t.new > 0) leaves.push({ id:'n-'+t.far_slug, value:t.new, color: col(t.color_var), label:t.far, x:x3, w:230, group:'n', filter:{event:'new', outcome:'delivered', subtypeFar:t.far} }); });
     if (leaves.length) leaves[leaves.length-1].gapAfter = groupGap;
-    FAR_TYPES.forEach(t => { if (t.updated > 0) leaves.push({ id:'u-'+t.far_slug, value:t.updated, color: col(t.color_var), label:t.far, x:x3, w:230, group:'u' }); });
+    FAR_TYPES.forEach(t => { if (t.updated > 0) leaves.push({ id:'u-'+t.far_slug, value:t.updated, color: col(t.color_var), label:t.far, x:x3, w:230, group:'u', filter:{event:'updated', outcome:'delivered', subtypeFar:t.far} }); });
 
     const links = [
       ['events','create'], ['events','update'], ['events','delete'],
@@ -424,23 +510,24 @@ _JS_TEMPLATE = r"""
       const mfColor = col('--status-notice');
       nodes['malformed'] = {
         id:'malformed', value: MALFORMED_COUNT, color: mfColor, labelLines:['Malformed','events'],
-        x:x0, w:wCol, y0:mfY0, y1:mfY0+mfH,
+        x:x0, w:wCol, y0:mfY0, y1:mfY0+mfH, filter:{event:'malformed'},
       };
       nodes['excluded-malformed'] = {
         id:'excluded-malformed', value: MALFORMED_COUNT, color: mfColor, label:'Excluded — malformed event',
-        x:x3, w:230, y0:mfY0, y1:mfY0+mfH,
+        x:x3, w:230, y0:mfY0, y1:mfY0+mfH, filter:{event:'malformed', outcome:'excluded_malformed'},
       };
     }
 
     function ribbon(x1,y1a,y1b,x2,y2a,y2b,color,opacity) {
       const mx = (x1+x2)/2;
-      return `<path d="M${x1},${y1a} C${mx},${y1a} ${mx},${y2a} ${x2},${y2a} L${x2},${y2b} C${mx},${y2b} ${mx},${y1b} ${x1},${y1b} Z" fill="${color}" opacity="${opacity}"/>`;
+      return `<path class="sankey-ribbon" d="M${x1},${y1a} C${mx},${y1a} ${mx},${y2a} ${x2},${y2a} L${x2},${y2b} C${mx},${y2b} ${mx},${y1b} ${x1},${y1b} Z" fill="${color}" opacity="${opacity}"/>`;
     }
 
     const bySource = {};
     links.forEach(([s,t]) => { (bySource[s] = bySource[s] || []).push(t); });
 
     let out = '';
+    const ribbonMeta = [];
     Object.keys(bySource).forEach(srcId => {
       const src = nodes[srcId];
       const targets = bySource[srcId];
@@ -455,12 +542,13 @@ _JS_TEMPLATE = r"""
         cursor += sliceH;
         const isGrey = greyRibbonTargets.has(id);
         out += ribbon(src.x + src.w, y1a, y1b, tgt.x, tgt.y0, tgt.y1, isGrey ? GREY_LIGHT : tgt.color, isGrey ? 0.45 : 0.32);
+        ribbonMeta.push({ filter: tgt.filter });
       });
     });
 
     Object.values(nodes).forEach(n => {
       if ((n.y1 - n.y0) <= 0) return;
-      out += `<rect x="${n.x}" y="${n.y0}" width="${n.w}" height="${(n.y1-n.y0).toFixed(1)}" rx="3" fill="${n.color}"/>`;
+      out += `<rect class="sankey-node" data-node-id="${n.id}" x="${n.x}" y="${n.y0}" width="${n.w}" height="${(n.y1-n.y0).toFixed(1)}" rx="3" fill="${n.color}"/>`;
       const midX = n.x + n.w / 2, midY = (n.y0 + n.y1) / 2;
       const lines = (n.labelLines || [n.label]).concat([n.value.toLocaleString()]);
       const lh = 14, startDy = -((lines.length - 1) * lh) / 2 + 4;
@@ -484,6 +572,30 @@ _JS_TEMPLATE = r"""
     const maxY = Math.max(...all.map(n => n.y1)) + 24;
     svg.setAttribute('viewBox', `0 0 ${maxX} ${maxY}`);
     svg.innerHTML = out;
+
+    // Hover is just a "this is clickable" hint -- the numbers themselves are
+    // already printed on every node, so a tooltip repeating them would add
+    // nothing. Clicking jumps to the record-level table below, filtered to
+    // exactly the records behind that node/ribbon.
+    const CLICK_HINT = '<div class="tt-title">Click to filter the record table below</div>';
+    svg.querySelectorAll('.sankey-ribbon').forEach((el, i) => {
+      const m = ribbonMeta[i];
+      const baseOpacity = el.getAttribute('opacity');
+      el.addEventListener('mouseenter', (e) => {
+        el.style.opacity = Math.min(1, parseFloat(baseOpacity) + 0.4);
+        showTooltip(e, CLICK_HINT);
+      });
+      el.addEventListener('mousemove', moveTooltip);
+      el.addEventListener('mouseleave', () => { el.style.opacity = baseOpacity; hideTooltip(); });
+      el.addEventListener('click', () => { hideTooltip(); applyChartFilter(m.filter); });
+    });
+    svg.querySelectorAll('.sankey-node').forEach((el) => {
+      const n = nodes[el.dataset.nodeId];
+      el.addEventListener('mouseenter', (e) => showTooltip(e, CLICK_HINT));
+      el.addEventListener('mousemove', moveTooltip);
+      el.addEventListener('mouseleave', hideTooltip);
+      el.addEventListener('click', () => { hideTooltip(); applyChartFilter(n.filter); });
+    });
   })();
 
   // ---------- record-level detail ----------
