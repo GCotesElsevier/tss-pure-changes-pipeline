@@ -163,3 +163,15 @@ for scope_name, scope_cfg in scopes_to_run.items():
 # Survives log truncation on the cell above — see comment where
 # scope_summaries is initialized.
 display(spark.createDataFrame(scope_summaries))
+
+# COMMAND ----------
+
+db = "academicinformationsystems_technicalservices.ajman"
+
+# Punto 4: antigüedad del último token de cada scope (límite de Pure: 30 días)
+for t in ["changes_sync_state_scholarly_activities", "changes_sync_state_grants"]:
+    print(t)
+    display(spark.sql(f"""
+        SELECT id, updated_at, run_date,
+               datediff(current_date(), CAST(updated_at AS DATE)) AS days_old
+        FROM {db}.{t} ORDER BY id DESC LIMIT 5"""))

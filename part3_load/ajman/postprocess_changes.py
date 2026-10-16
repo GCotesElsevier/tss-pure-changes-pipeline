@@ -504,6 +504,7 @@ summary_df = summary_df[["scope", "status", "subtype", "count"]]
 # TOTAL across scopes (e.g. Grants + Scholarly Activities added together)
 # isn't a meaningful number on its own.
 for scope in summary_df["scope"].unique():
-    scope_df = summary_df[summary_df["scope"] == scope]
+    scope_df = summary_df[summary_df["scope"] == scope][["status", "subtype", "count"]]
+    print(scope)
     print(scope_df.to_string(index=False))
     print(f"TOTAL ({scope}): {scope_df['count'].sum()}\n")
