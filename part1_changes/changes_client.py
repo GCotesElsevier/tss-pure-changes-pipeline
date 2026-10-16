@@ -17,10 +17,14 @@
 # COMMAND ----------
 
 import logging
+import time
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+CHANGES_RETRY_ATTEMPTS = 3
+CHANGES_RETRY_BACKOFF_SECONDS = 5
 
 
 class PureChangesClient:
@@ -34,13 +38,37 @@ class PureChangesClient:
     def _get_page(self, token_or_date: str) -> dict:
         url = f"{self.base_url}/changes/{token_or_date}"
         headers = {"accept": "application/json", "api-key": self.api_key}
-        # No timeout meant a single stalled connection could hang forever —
-        # same class of bug found and fixed in pure_api_client.py
-        # 2026-07-23 (see that file for the full story).
-        response = requests.get(url, headers=headers, verify=self.verify_ssl, timeout=30)
-        if response.status_code != 200:
+        # Re-requesting the same token returns the same page, so retrying is
+        # safe. A single ReadTimeout on page 49 of a long catch-up used to
+        # abort the whole scope (found 2026-10-16, Ajman); only transient
+        # failures are retried, a 4xx or a failure that outlasts every
+        # attempt still raises.
+        for attempt in range(1, CHANGES_RETRY_ATTEMPTS + 1):
+            try:
+                # No timeout meant a single stalled connection could hang
+                # forever — same class of bug found and fixed in
+                # pure_api_client.py 2026-07-23 (see that file for the full story).
+                response = requests.get(url, headers=headers, verify=self.verify_ssl, timeout=30)
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                if attempt == CHANGES_RETRY_ATTEMPTS:
+                    raise
+                logger.warning(
+                    "/changes request failed (attempt %d/%d): %s — retrying in %ds",
+                    attempt, CHANGES_RETRY_ATTEMPTS, e, CHANGES_RETRY_BACKOFF_SECONDS,
+                )
+                time.sleep(CHANGES_RETRY_BACKOFF_SECONDS)
+                continue
+
+            if response.status_code == 200:
+                return response.json()
+            if (response.status_code >= 500 or response.status_code == 429) and attempt < CHANGES_RETRY_ATTEMPTS:
+                logger.warning(
+                    "/changes returned %d (attempt %d/%d) — retrying in %ds",
+                    response.status_code, attempt, CHANGES_RETRY_ATTEMPTS, CHANGES_RETRY_BACKOFF_SECONDS,
+                )
+                time.sleep(CHANGES_RETRY_BACKOFF_SECONDS)
+                continue
             raise Exception(f"Error {response.status_code}: {response.text}")
-        return response.json()
 
     def fetch_changes(self, start_token_or_date: str, families=None):
         """
