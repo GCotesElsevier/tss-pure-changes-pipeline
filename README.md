@@ -1,3 +1,7 @@
+# NOTICE
+
+This was the previous version of the repo. For newest content please refer to https://github.com/elsevier-research/tss-changes.git
+
 # Pure Changes Pipeline
 
 Sync pipeline that keeps an external system (FAR / Interfolio) up to date with
